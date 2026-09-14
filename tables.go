@@ -97,6 +97,30 @@ const (
 	EXACT = 3 // exact score    (PV node)
 )
 
+// Ranks and files
+
+const (
+	rank1 = 0
+	rank2 = 1
+	rank3 = 2
+	rank4 = 3
+	rank5 = 4
+	rank6 = 5
+	rank7 = 6
+	rank8 = 7
+)
+
+const (
+	fileA = 0
+	fileB = 1
+	fileC = 2
+	fileD = 3
+	fileE = 4
+	fileF = 5
+	fileG = 6
+	fileH = 7
+)
+
 // Squares: A1=0, B1=1, ... H8=63.
 // Files run A-H (0-7), ranks run 1-8 (0-7).
 // square = rank*8 + file.

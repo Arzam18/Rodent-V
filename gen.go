@@ -60,7 +60,7 @@ func genCaptures(p *Pos, list []int) int {
 	if side == White {
 		// Promotion-captures to the left (toward file A).
 		// Source: White pawns on rank 7, not on file A, shifted +7.
-		bb := ((p.pieceBB(White, P) & ^fileABB & rank7BB) << 7) & p.colorBB[Black]
+		bb := ((p.whitePawns() & ^fileABB & rank7BB) << 7) & p.colorBB[Black]
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (Q_PROM << 12) | (to << 6) | (to - 7)
@@ -74,7 +74,7 @@ func genCaptures(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Promotion-captures to the right (toward file H).
-		bb = ((p.pieceBB(White, P) & ^fileHBB & rank7BB) << 9) & p.colorBB[Black]
+		bb = ((p.whitePawns() & ^fileHBB & rank7BB) << 9) & p.colorBB[Black]
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (Q_PROM << 12) | (to << 6) | (to - 9)
@@ -88,7 +88,7 @@ func genCaptures(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Quiet promotions (pawn on rank 7 pushes straight to rank 8).
-		bb = ((p.pieceBB(White, P) & rank7BB) << 8) & p.empty()
+		bb = ((p.whitePawns() & rank7BB) << 8) & p.empty()
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (Q_PROM << 12) | (to << 6) | (to - 8)
@@ -102,7 +102,7 @@ func genCaptures(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Normal captures left (no rank-7 pawns, no file-A pawns).
-		bb = ((p.pieceBB(White, P) & ^fileABB & ^rank7BB) << 7) & p.colorBB[Black]
+		bb = ((p.whitePawns() & ^fileABB & ^rank7BB) << 7) & p.colorBB[Black]
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (to << 6) | (to - 7)
@@ -110,7 +110,7 @@ func genCaptures(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Normal captures right.
-		bb = ((p.pieceBB(White, P) & ^fileHBB & ^rank7BB) << 9) & p.colorBB[Black]
+		bb = ((p.whitePawns() & ^fileHBB & ^rank7BB) << 9) & p.colorBB[Black]
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (to << 6) | (to - 9)
@@ -119,11 +119,11 @@ func genCaptures(p *Pos, list []int) int {
 		}
 		// En passant.
 		if to := p.epSquare; to != NO_SQ {
-			if ((p.pieceBB(White, P)&^fileABB)<<7)&squareBit(to) != 0 {
+			if ((p.whitePawns()&^fileABB)<<7)&squareBit(to) != 0 {
 				list[n] = (EP_CAP << 12) | (to << 6) | (to - 7)
 				n++
 			}
-			if ((p.pieceBB(White, P)&^fileHBB)<<9)&squareBit(to) != 0 {
+			if ((p.whitePawns()&^fileHBB)<<9)&squareBit(to) != 0 {
 				list[n] = (EP_CAP << 12) | (to << 6) | (to - 9)
 				n++
 			}
@@ -131,7 +131,7 @@ func genCaptures(p *Pos, list []int) int {
 	} else {
 		// Black pawns advance in the decreasing-index direction (>>).
 		// Promotion-captures left (from Black's perspective: toward file A, shift >>9).
-		bb := ((p.pieceBB(Black, P) & ^fileABB & rank2BB) >> 9) & p.colorBB[White]
+		bb := ((p.blackPawns() & ^fileABB & rank2BB) >> 9) & p.colorBB[White]
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (Q_PROM << 12) | (to << 6) | (to + 9)
@@ -145,7 +145,7 @@ func genCaptures(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Promotion-captures right (>>7).
-		bb = ((p.pieceBB(Black, P) & ^fileHBB & rank2BB) >> 7) & p.colorBB[White]
+		bb = ((p.blackPawns() & ^fileHBB & rank2BB) >> 7) & p.colorBB[White]
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (Q_PROM << 12) | (to << 6) | (to + 7)
@@ -159,7 +159,7 @@ func genCaptures(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Quiet promotions.
-		bb = ((p.pieceBB(Black, P) & rank2BB) >> 8) & p.empty()
+		bb = ((p.blackPawns() & rank2BB) >> 8) & p.empty()
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (Q_PROM << 12) | (to << 6) | (to + 8)
@@ -173,7 +173,7 @@ func genCaptures(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Normal captures left.
-		bb = ((p.pieceBB(Black, P) & ^fileABB & ^rank2BB) >> 9) & p.colorBB[White]
+		bb = ((p.blackPawns() & ^fileABB & ^rank2BB) >> 9) & p.colorBB[White]
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (to << 6) | (to + 9)
@@ -181,7 +181,7 @@ func genCaptures(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Normal captures right.
-		bb = ((p.pieceBB(Black, P) & ^fileHBB & ^rank2BB) >> 7) & p.colorBB[White]
+		bb = ((p.blackPawns() & ^fileHBB & ^rank2BB) >> 7) & p.colorBB[White]
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (to << 6) | (to + 7)
@@ -190,11 +190,11 @@ func genCaptures(p *Pos, list []int) int {
 		}
 		// En passant.
 		if to := p.epSquare; to != NO_SQ {
-			if ((p.pieceBB(Black, P)&^fileABB)>>9)&squareBit(to) != 0 {
+			if ((p.blackPawns()&^fileABB)>>9)&squareBit(to) != 0 {
 				list[n] = (EP_CAP << 12) | (to << 6) | (to + 9)
 				n++
 			}
-			if ((p.pieceBB(Black, P)&^fileHBB)>>7)&squareBit(to) != 0 {
+			if ((p.blackPawns()&^fileHBB)>>7)&squareBit(to) != 0 {
 				list[n] = (EP_CAP << 12) | (to << 6) | (to + 7)
 				n++
 			}
@@ -202,7 +202,7 @@ func genCaptures(p *Pos, list []int) int {
 	}
 
 	// ---- Knight captures ----
-	pieces := p.pieceBB(side, N)
+	pieces := p.knights(side)
 	for pieces != 0 {
 		from := lsb(pieces)
 		bb := knightAtk[from] & p.colorBB[opp(side)]
@@ -216,7 +216,7 @@ func genCaptures(p *Pos, list []int) int {
 	}
 
 	// ---- Bishop captures ----
-	pieces = p.pieceBB(side, B)
+	pieces = p.bishops(side)
 	for pieces != 0 {
 		from := lsb(pieces)
 		bb := bishopAttacks(occ, from) & p.colorBB[opp(side)]
@@ -230,7 +230,7 @@ func genCaptures(p *Pos, list []int) int {
 	}
 
 	// ---- Rook captures ----
-	pieces = p.pieceBB(side, R)
+	pieces = p.rooks(side)
 	for pieces != 0 {
 		from := lsb(pieces)
 		bb := rookAttacks(occ, from) & p.colorBB[opp(side)]
@@ -244,7 +244,7 @@ func genCaptures(p *Pos, list []int) int {
 	}
 
 	// ---- Queen captures ----
-	pieces = p.pieceBB(side, Q)
+	pieces = p.queens(side)
 	for pieces != 0 {
 		from := lsb(pieces)
 		bb := queenAttacks(occ, from) & p.colorBB[opp(side)]
@@ -337,7 +337,7 @@ func genQuiet(p *Pos, list []int) int {
 			}
 		}
 		// Double pawn push: only from rank 2, and rank 3 must be clear too.
-		bb := (((p.pieceBB(White, P) & rank2BB) << 8) & empty) << 8 & empty
+		bb := (((p.whitePawns() & rank2BB) << 8) & empty) << 8 & empty
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (EP_SET << 12) | (to << 6) | (to - 16)
@@ -345,7 +345,7 @@ func genQuiet(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Single pawn push (not rank 7; promotions are in genCaptures).
-		bb = ((p.pieceBB(White, P) & ^rank7BB) << 8) & empty
+		bb = ((p.whitePawns() & ^rank7BB) << 8) & empty
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (to << 6) | (to - 8)
@@ -409,7 +409,7 @@ func genQuiet(p *Pos, list []int) int {
 			}
 		}
 		// Double pawn push.
-		bb := (((p.pieceBB(Black, P) & rank7BB) >> 8) & empty) >> 8 & empty
+		bb := (((p.blackPawns() & rank7BB) >> 8) & empty) >> 8 & empty
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (EP_SET << 12) | (to << 6) | (to + 16)
@@ -417,7 +417,7 @@ func genQuiet(p *Pos, list []int) int {
 			bb &= bb - 1
 		}
 		// Single pawn push.
-		bb = ((p.pieceBB(Black, P) & ^rank2BB) >> 8) & empty
+		bb = ((p.blackPawns() & ^rank2BB) >> 8) & empty
 		for bb != 0 {
 			to := lsb(bb)
 			list[n] = (to << 6) | (to + 8)
@@ -427,7 +427,7 @@ func genQuiet(p *Pos, list []int) int {
 	}
 
 	// ---- Knight quiet moves ----
-	pieces := p.pieceBB(side, N)
+	pieces := p.knights(side)
 	for pieces != 0 {
 		from := lsb(pieces)
 		bb := knightAtk[from] & empty
@@ -441,7 +441,7 @@ func genQuiet(p *Pos, list []int) int {
 	}
 
 	// ---- Bishop quiet moves ----
-	pieces = p.pieceBB(side, B)
+	pieces = p.bishops(side)
 	for pieces != 0 {
 		from := lsb(pieces)
 		bb := bishopAttacks(occ, from) & empty
@@ -455,7 +455,7 @@ func genQuiet(p *Pos, list []int) int {
 	}
 
 	// ---- Rook quiet moves ----
-	pieces = p.pieceBB(side, R)
+	pieces = p.rooks(side)
 	for pieces != 0 {
 		from := lsb(pieces)
 		bb := rookAttacks(occ, from) & empty
@@ -469,7 +469,7 @@ func genQuiet(p *Pos, list []int) int {
 	}
 
 	// ---- Queen quiet moves ----
-	pieces = p.pieceBB(side, Q)
+	pieces = p.queens(side)
 	for pieces != 0 {
 		from := lsb(pieces)
 		bb := queenAttacks(occ, from) & empty

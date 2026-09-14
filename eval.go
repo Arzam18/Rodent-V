@@ -118,14 +118,15 @@ func init() {
 	// A pawn is isolated if adjFileMask[file] & ownPawns == 0.
 	for f := 0; f < 8; f++ {
 		adjFileMask[f] = 0
-		if f > 0 {
+		if f > fileA {
 			adjFileMask[f] |= fileABB << uint(f-1)
 		}
-		if f < 7 {
+		if f < fileH {
 			adjFileMask[f] |= fileABB << uint(f+1)
 		}
 	}
 
+	// --- Init pawn and eval hashtables ---
 	initEvalHash(128 * 128)
 	initPawnHash(64 * 128)
 }
@@ -365,7 +366,7 @@ Total NPS   : 1122545
 }
 
 func kingWing(sq int) int {
-	if fileOf(sq) < 4 {
+	if fileOf(sq) < fileE {
 		return 0
 	}
 	return 1
@@ -382,7 +383,7 @@ func kingBucket(p *Pos, side int) int {
 func normalizeSquare(p *Pos, side, sq int) int {
 	kingSq := p.kingSq[side]
 
-	if fileOf(kingSq) < 4 {
+	if fileOf(kingSq) < fileE {
 		sq ^= 7
 	}
 
@@ -397,7 +398,7 @@ func evaluatePieces(p *Pos, e *EvalData, side int) {
 	enemyRing := e.kingRing[enemy]
 
 	// Knight eval
-	pieces := p.pieceBB(side, N)
+	pieces := p.knights(side)
 	for pieces != 0 {
 		sq := lsb(pieces)
 		add(e, side, EvalMaterial, pieceValMG[N], pieceValEG[N])
@@ -437,7 +438,7 @@ func evaluatePieces(p *Pos, e *EvalData, side int) {
 	// like a rook, yet I dod not manage to tune it away.
 
 	// Bishop eval
-	pieces = p.pieceBB(side, B)
+	pieces = p.bishops(side)
 	if popCount(pieces) >= 2 {
 		add(e, side, EvalMaterial, bishopPairMG, bishopPairEG)
 	}
@@ -481,7 +482,7 @@ func evaluatePieces(p *Pos, e *EvalData, side int) {
 	}
 
 	// Rook eval
-	pieces = p.pieceBB(side, R)
+	pieces = p.rooks(side)
 	if popCount(pieces) >= 2 {
 		add(e, side, EvalMaterial, rookPairMG, rookPairEG)
 	}
@@ -521,7 +522,7 @@ func evaluatePieces(p *Pos, e *EvalData, side int) {
 	}
 
 	// Queen eval
-	pieces = p.pieceBB(side, Q)
+	pieces = p.queens(side)
 	for pieces != 0 {
 		sq := lsb(pieces)
 
@@ -692,7 +693,7 @@ func evaluatePawns(p *Pos, e *EvalData, side int) {
 
 		if pushSq >= 0 && pushSq < 64 && p.pieceBB(side, P)&squareBit(pushSq) != 0 {
 			fileIdx := fileOf(sq)
-			if fileIdx > 3 {
+			if fileIdx > fileD {
 				fileIdx = 7 - fileIdx
 			}
 			add(e, side, EvalPawns, doubledPawnMG[fileIdx], doubledPawnEG[fileIdx])
@@ -746,7 +747,7 @@ func evaluatePassers(p *Pos, e *EvalData, side int) {
 				// Slider behind: enemy rook or queen behind the passer on
 				// the same file controls the promotion path.
 				behindMask := fillBackward(squareBit(sq), side)
-				enemySliders := p.pieceBB(enemy, R) | p.pieceBB(enemy, Q)
+				enemySliders := p.rooks(enemy) | p.queens(enemy)
 				if behindMask&enemySliders != 0 {
 					add(e, side, EvalPassers, -25, -45)
 				}
@@ -763,16 +764,13 @@ func evaluatePassers(p *Pos, e *EvalData, side int) {
 func pawnShieldMG(p *Pos, side int) int {
 	kSq := p.kingSq[side]
 	kFile := fileOf(kSq)
-
 	ownPawns := p.pieceBB(side, P)
 	enemyPawns := p.pieceBB(opp(side), P)
-
-	// info depth 30 seldepth 43 multipv 1 time 127349 nodes 134613308 nps 1057042 hashfull 1000 score cp 41 pv e2e4 c7c5 g1f3 e
 	penalty := 0
 
 	for df := -1; df <= 1; df++ {
 		f := kFile + df
-		if f < 0 || f > 7 {
+		if f < fileA || f > fileH {
 			continue
 		}
 
@@ -781,9 +779,9 @@ func pawnShieldMG(p *Pos, side int) int {
 		// Ranks immediately in front of the king (r2 closer, r3 further).
 		var r2, r3, r4, r5, r6, r7 int
 		if side == White {
-			r2, r3, r4, r5, r6, r7 = rankOf(A2), rankOf(A3), rankOf(A4), rankOf(A5), rankOf(A6), rankOf(A7)
+			r2, r3, r4, r5, r6, r7 = rank2, rank3, rank4, rank5, rank6, rank7
 		} else {
-			r2, r3, r4, r5, r6, r7 = rankOf(A7), rankOf(A6), rankOf(A5), rankOf(A4), rankOf(A3), rankOf(A2)
+			r2, r3, r4, r5, r6, r7 = rank7, rank6, rank5, rank4, rank3, rank2
 		}
 
 		hasPawnR2 := ownPawns&squareBit(makeSquare(f, r2)) != 0
@@ -816,7 +814,7 @@ func pawnShieldMG(p *Pos, side int) int {
 		}
 
 		// king's file penalty is bigger
-		if fileMask & p.pieceBB(side, K) > 0 {
+		if fileMask & p.king(side) > 0 {
 			penalty *= 12
 			penalty /= 10
 		}
