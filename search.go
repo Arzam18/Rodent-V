@@ -461,14 +461,7 @@ func (ss *SearchState) search(p *Pos, ply, alpha, beta, depth int, wasNull bool,
 
 		// Skip excluded root moves for MultiPV support
 		if isRoot {
-			skip := false
-			for _, excluded := range ss.excludedRootMoves {
-				if move == excluded {
-					skip = true
-					break
-				}
-			}
-			if skip {
+			if ss.excludeRootMove(move) {
 				continue
 			}
 		}
@@ -476,34 +469,33 @@ func (ss *SearchState) search(p *Pos, ply, alpha, beta, depth int, wasNull bool,
 		// Does the move give check? We detect it before executing a move using cached CheckInfo.
 		givesCheck := moveGivesCheck(p, move, &checkInfo)
 
-		// Movegen stage flags to simplify pruning/reduction conditions.
+		// Flags to simplify pruning/reduction conditions.
 		quietStage := stage == StageQuiet
 		badCapStage := stage == StageBadCaptures
+		prunableQuiet := quietStage && !isPv && !nodeInCheck && !givesCheck
 
 		// Late move pruning: skip quiet moves beyond the threshold.
 		// Moves that give check are exempt — they may be the only defence
 		// or the only way to continue a mating attack.
 		// When improving we allow more moves (position is trending up, so
 		// later moves are more likely to be relevant).
-		if depth < 10 { // table size limit
+		if useLMP && prunableQuiet && depth < 10 { // table size limit
 
 			lmpThreshold := lmp[0][depth]
 			if improving {
 				lmpThreshold = lmp[1][depth]
 			}
 
-			if useLMP && quietStage && !isPv && !nodeInCheck && depth < LMPdepth &&
-				quietTried > lmpThreshold && !givesCheck {
+			if depth < LMPdepth && quietTried > lmpThreshold {
 				continue
 			}
 		}
 
 		// Futility pruning: at shallow depth, skip late quiet moves that
 		// cannot plausibly raise alpha even with a generous margin.
-		if useFutility && quietStage && !isPv && !nodeInCheck && !givesCheck &&
-			ss.excludedMove[ply] == 0 && depth <= fpMaxDepth &&
-			quietTried > 0 && !isMating(alpha) &&
-			staticEval+fpMargin*depth <= alpha {
+		if useFutility && prunableQuiet && ss.excludedMove[ply] == 0 && 
+		   depth <= fpMaxDepth && quietTried > 0 && !isMating(alpha) &&
+		   staticEval+fpMargin*depth <= alpha {
 			continue
 		}
 
@@ -1067,17 +1059,19 @@ func (ss *SearchState) reportInfo(score int, pv []int) {
 	}
 
 	// Set elapsed (time used so far), and guard
-	// against division by zero in nps calculation
+	// against division by zero in nps calculation.
 	elapsed := time.Now().UnixMilli() - ss.searchStart
 	if elapsed <= 0 {
 		elapsed = 1
 	}
 
-	// Calculate nodes per second
+	// Calculate nodes per second.
 	nps := ss.nodes * 1000 / elapsed
 
-	// Output
+	// Calculate hash table usage.
 	hashfull := ttHashfull()
+
+	// Output
 	if !IsBenchMode {
 		buf := uciBufPool.Get().(*bytes.Buffer)
 		buf.Reset()
@@ -1151,6 +1145,16 @@ func (ss *SearchState) isImproving(ply, staticEval int, nodeInCheck bool) bool {
 		return staticEval > ss.evalStack[ply-4]
 	}
 	return true
+}
+
+// Should a root move be excluded in multi-pv mode?
+func (ss *SearchState) excludeRootMove(move int) bool{
+	for _, excluded := range ss.excludedRootMoves {
+		if move == excluded {
+			return true	
+		}
+	}
+	return false
 }
 
 // Detect non-queen promotions
