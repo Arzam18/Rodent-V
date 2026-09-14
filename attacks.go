@@ -69,10 +69,10 @@ func attacksTo(p *Pos, sq int) uint64 {
 // as the first attacker is found, making it faster for check tests.
 func isAttacked(p *Pos, sq, side int) bool {
 	occ := p.occupied()
-	return (p.pieceBB(side, P)&pawnAtk[opp(side)][sq] != 0) ||
-		(p.pieceBB(side, N)&knightAtk[sq] != 0) ||
-		((p.pieceBB(side, B)|p.pieceBB(side, Q))&bishopAttacks(occ, sq) != 0) ||
-		((p.pieceBB(side, R)|p.pieceBB(side, Q))&rookAttacks(occ, sq) != 0) ||
+	return (p.pawns(side)&pawnAtk[opp(side)][sq] != 0) ||
+		(p.knights(side)&knightAtk[sq] != 0) ||
+		((p.bishops(side)|p.queens(side))&bishopAttacks(occ, sq) != 0) ||
+		((p.rooks(side)|p.queens(side))&rookAttacks(occ, sq) != 0) ||
 		(p.pieceBB(side, K)&kingAtk[sq] != 0)
 }
 

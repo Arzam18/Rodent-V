@@ -78,6 +78,46 @@ func (p *Pos) occupied() uint64 { return p.colorBB[White] | p.colorBB[Black] }
 // empty returns a bitboard of all empty squares.
 func (p *Pos) empty() uint64 { return ^p.occupied() }
 
+// whitePawns() returns a bitboard of all the white pawns.
+func (p *Pos) whitePawns() uint64 {
+	return p.colorBB[White] & p.typeBB[P]
+}
+
+// blackPawns() returns a bitboard of all the black pawns.
+func (p *Pos) blackPawns() uint64 {
+	return p.colorBB[Black] & p.typeBB[P]
+}
+
+// pawns() returns a bitboard of all the pawns of a given color.
+func (p *Pos) pawns(color int) uint64 {
+	return p.colorBB[color] & p.typeBB[P]
+}
+
+// knights() returns a bitboard of all the knights of a given color.
+func (p *Pos) knights(color int) uint64 {
+	return p.colorBB[color] & p.typeBB[N]
+}
+
+// bishops() returns a bitboard of all the bishops of a given color.
+func (p *Pos) bishops(color int) uint64 {
+	return p.colorBB[color] & p.typeBB[B]
+}
+
+// rooks() returns a bitboard of all the rooks of a given color.
+func (p *Pos) rooks(color int) uint64 {
+	return p.colorBB[color] & p.typeBB[R]
+}
+
+// queens() returns a bitboard of all the queens of a given color.
+func (p *Pos) queens(color int) uint64 {
+	return p.colorBB[color] & p.typeBB[Q]
+}
+
+// king() returns a bitboard locating a king of a given color.
+func (p *Pos) king(color int) uint64 {
+	return p.colorBB[color] & p.typeBB[K]
+}
+
 // pieceBB returns the bitboard of pieces of the given color and type.
 func (p *Pos) pieceBB(color, pieceType int) uint64 {
 	return p.colorBB[color] & p.typeBB[pieceType]
