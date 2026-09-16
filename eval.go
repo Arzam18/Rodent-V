@@ -29,6 +29,10 @@
 // 		Endgame uses one shared PST set, but still uses the same own-king
 // 		normalization.
 //
+//		There is also a set of smaller tables, restricted to ranks 1-5,
+//		used upon detecting certain central pawn structures. This brings
+//		roughly 20 Elo for an inordinate number of new parameters.
+//
 //   4. PASSED PAWNS
 //      Bonus that grows with rank (closer to promotion). Evaluation takes
 //      into account blockade, king proximity and enemy major piece behind
@@ -48,12 +52,29 @@
 //
 //   7. THREATS
 //      Attacks on pieces, subdivided into defended and undefended
+//
+//	 8. ROOKS
+//		Rooks on open and half-open files
+//
+//	 9. ENDGAME SCALING
+//		We detect certain drawish endgames and scale the score down.
+//		Also, there is a function to speed up evaluation of checkmate
+//		positions, including infamous KBN vs K endgame.
+//
 
 package main
 
+// Enemy king position, used to select midgame piece/square table.
 const (
 	SameWing = iota
 	OppositeWing
+)
+
+// Masks used in pawn center detection to determine 
+// which adjustement pst tables will be used
+const (
+	narrowCenter = fileDBB | fileEBB
+	wideCenter   = fileCBB | fileDBB | fileEBB
 )
 
 // Stuff not in params.go, because we don't tune it
@@ -64,13 +85,6 @@ var minorHomeBB = [2]uint64{
 	White: (1 << B1) | (1 << C1) | (1 << F1) | (1 << G1),
 	Black: (1 << B8) | (1 << C8) | (1 << F8) | (1 << G8),
 }
-
-// Masks used in pawn center detection to determine 
-// which adjustement pst tables will be used
-const (
-	narrowCenter = fileDBB | fileEBB
-	wideCenter   = fileCBB | fileDBB | fileEBB
-)
 
 // devPenaltyScale: multiplier for the quadratic undevelopment penalty.
 // penalty = undeveloped^2 * devPenaltyScale  (MG only)
@@ -152,7 +166,8 @@ func evaluate(p *Pos, acc *Accumulator, ss *SearchState) int {
 
 		score = hceScore + nnueScore
 
-		// Flair options
+		// Flair options. These are eval terms that did not get into main eval, 
+		// but are interesting enough for personalities.
 		if singleOptionValue[LikesClosed] > 0 {
 			score += flairClosed(p)
 		}
@@ -253,7 +268,7 @@ func eval_internal(p *Pos, shouldReport bool, ss *SearchState) int {
 	evaluatePieces(p, &e, White)
 	evaluatePieces(p, &e, Black)
 	
-	// Passed pawn evaluation (~400+ Elo, version without it loses everything)
+	// Passed pawn evaluation (~150 Elo)
 	evaluatePassers(p, &e, White)
 	evaluatePassers(p, &e, Black)
 
