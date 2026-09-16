@@ -10,7 +10,8 @@
 //   ------------------------------------------------------------------
 //   1. MATERIAL BALANCE
 //      The most important term. Different values for midgame/endgame,
-//      interpolated according to game phase.
+//      interpolated according to game phase. We also apply adjustements
+//		for bishop pair, rook pair, exchange advantage and 2 minors vs rook.
 //
 //   2. MOBILITY
 //      Bigger values for weaker pieces, major pieces gain in the endgame.
@@ -18,8 +19,15 @@
 //   3. PIECE-SQUARE TABLES
 //      Bonuses for occupying good squares, m*luses for occupying bad ones;
 //      skeleton for eval functions. Different values for midgame/endgame,
-//      interpolated according to game phase. Right now we use PeSTo tables,
-//      modified to cater for existence of passed pawn eval.
+//      interpolated according to game phase, normalized for king placement.
+//
+// 		If our king is on files a-d, the whole friendly piece set is mirrored
+// 		horizontally. Our king therefore always occupies the canonical kingside.
+// 		The middlegame PST is selected according to whether the enemy king
+// 		is physically on the same wing or opposite wing.
+//
+// 		Endgame uses one shared PST set, but still uses the same own-king
+// 		normalization.
 //
 //   4. PASSED PAWNS
 //      Bonus that grows with rank (closer to promotion). Evaluation takes
@@ -34,7 +42,7 @@
 //      Phalanx: bonus for pawns standing side by side
 //
 //   6. KING SAFETY
-//      Evaluationg attacks on the squares in the king's ring,
+//      Evaluating attacks on the squares in the king's ring,
 //      safe checks, contact queen checks, attacked and undefended
 //      squares near the king
 //
@@ -42,27 +50,6 @@
 //      Attacks on pieces, subdivided into defended and undefended
 
 package main
-
-// Each side is evaluated in a coordinate system normalized around
-// its own king.
-//
-//   1. White keeps the normal PeSTO orientation.
-//      Black is flipped vertically.
-//   2. If our normalized king is on files a-d, the whole friendly
-//      piece set is mirrored horizontally.
-//   3. Our king therefore always occupies the canonical kingside.
-//   4. The middlegame PST is selected according to whether the
-//      enemy king is physically on the same wing or opposite wing.
-//
-// The two middlegame PST sets are intentionally duplicated even
-// though their initial values are identical. They can diverge while
-// tuning.
-//
-// Endgame uses one shared PST set, but still uses the same own-king
-// normalization.
-//
-// Additional terms are the current evaluator's mobility, passed-pawn
-// bonus, and isolated-pawn penalty.
 
 const (
 	SameWing = iota
@@ -77,6 +64,13 @@ var minorHomeBB = [2]uint64{
 	White: (1 << B1) | (1 << C1) | (1 << F1) | (1 << G1),
 	Black: (1 << B8) | (1 << C8) | (1 << F8) | (1 << G8),
 }
+
+// Masks used in pawn center detection to determine 
+// which adjustement pst tables will be used
+const (
+	narrowCenter = fileDBB | fileEBB
+	wideCenter   = fileCBB | fileDBB | fileEBB
+)
 
 // devPenaltyScale: multiplier for the quadratic undevelopment penalty.
 // penalty = undeveloped^2 * devPenaltyScale  (MG only)
@@ -241,66 +235,38 @@ func eval_internal(p *Pos, shouldReport bool, ss *SearchState) int {
 	// tracking against the enemy king zone is available.
 	e.kingRing[White] = kingAtk[p.kingSq[White]]
 	e.kingRing[Black] = kingAtk[p.kingSq[Black]]
-
-	/*
-	Bench Complete!
-Total Nodes : 63757745
-Total Time  : 57570 ms
-Total NPS   : 1107481
-63757745 nodes 1107481 nps
-
-Total Nodes : 63757745
-Total Time  : 56797 ms
-Total NPS   : 1122545
-63757745 nodes 1122545 nps
 	
-	*/
-
-
-	// Piece/square tables, normalized so that own king
-	// appears on the kingside and taking into account
-	// enemy king's wing. We have different sets for kings
-	// on the same wing and kings on the opposite wings.
-	var pstMg[2] int
-	var pstEg[2] int
-		for side := White; side <= Black; side++ {
-		bucket := kingBucket(p, side)
-
-		for pt := P; pt <= K; pt++ {
-			pieces := p.pieceBB(side, pt)
-
-			for pieces != 0 {
-				sq := lsb(pieces)
-				pieces &= pieces - 1
-
-				nsq := normalizeSquare(p, side, sq)
-
-				if bucket == SameWing {
-					pstMg[side] += pstSameByColor[side][pt][nsq]
-				} else {
-					pstMg[side] += pstOppositeByColor[side][pt][nsq]
-				}
-
-				pstEg[side] += pstEGByColor[side][pt][nsq]
-			}
-		}
-	}
-	add(&e, White, EvalPst, pstMg[White], pstEg[White])
-	add(&e, Black, EvalPst, pstMg[Black], pstEg[Black])
-
+	// Piece/square tables 
+	// (~results vs default: 
+	// 0%:    -221 Elo, 
+	// 50%:    -81 Elo
+	// 120%     -8 Elo)
+	evaluatePieceSquare(p, &e)
+	
+	// Pawn structure, including king's pawn shield (~31 Elo)
 	evaluatePawnStructure(p, &e, ss)
 
+	// Evaluate mobility, adjustement pst tables and assorted positional factors,
+	// gather king attack and board control data.
+	// mobility: ~92 Elo
+	// adjustement psts: ~20 Elo
 	evaluatePieces(p, &e, White)
 	evaluatePieces(p, &e, Black)
+	
+	// Passed pawn evaluation (~400+ Elo, version without it loses everything)
 	evaluatePassers(p, &e, White)
 	evaluatePassers(p, &e, Black)
+
+	// King safety evaluation (~36 Elo)
 	evaluateKing(p, &e, White)
 	evaluateKing(p, &e, Black)
-	// Threats use the fully-built attack maps from all evaluators above.
+	
+	// Threats use the fully-built attack maps from all evaluators above (~73 Elo).
 	evaluateThreats(p, &e, White)
 	evaluateThreats(p, &e, Black)
 
 	// Material imbalance eval
+
 	wMinors := p.count[White][N] + p.count[White][B]
 	bMinors := p.count[Black][N] + p.count[Black][B]
 	wMajors := p.count[White][R] + 2 * p.count[White][Q]
@@ -331,7 +297,7 @@ Total NPS   : 1122545
 
 	score := (mg*e.phase + eg*(24-e.phase)) / 24
 
-	// Pull score of drawish endgames closer to 0
+	// Pull score of drawish endgames closer to 0 (~13 Elo)
 	if e.phase < 7 { // R+R+B = 5, Q vs R = 6
 
 		score += checkmateHelper(p, &e)
@@ -363,6 +329,39 @@ Total NPS   : 1122545
 		return score
 	}
 	return -score
+}
+
+// Piece/square tables are normalized so that own king
+// always appears on the kingside. Furthermore, we use
+// two variants: for kings on the same wing and for kings
+// on the opposire wings.
+func evaluatePieceSquare(p *Pos, e *EvalData) {
+	var pstMg[2] int
+	var pstEg[2] int
+		for side := White; side <= Black; side++ {
+		bucket := kingBucket(p, side)
+
+		for pt := P; pt <= K; pt++ {
+			pieces := p.pieceBB(side, pt)
+
+			for pieces != 0 {
+				sq := lsb(pieces)
+				pieces &= pieces - 1
+
+				nsq := normalizeSquare(p, side, sq)
+
+				if bucket == SameWing {
+					pstMg[side] += pstSameByColor[side][pt][nsq]
+				} else {
+					pstMg[side] += pstOppositeByColor[side][pt][nsq]
+				}
+
+				pstEg[side] += pstEGByColor[side][pt][nsq]
+			}
+		}
+	}
+	add(e, White, EvalPst, pstMg[White], pstEg[White])
+	add(e, Black, EvalPst, pstMg[Black], pstEg[Black])
 }
 
 func kingWing(sq int) int {
@@ -401,6 +400,8 @@ func evaluatePieces(p *Pos, e *EvalData, side int) {
 	pieces := p.knights(side)
 	for pieces != 0 {
 		sq := lsb(pieces)
+
+		// Knight material
 		add(e, side, EvalMaterial, pieceValMG[N], pieceValEG[N])
 
 		// Piece/square adjustement for predefined pawn centers
@@ -445,7 +446,7 @@ func evaluatePieces(p *Pos, e *EvalData, side int) {
 	for pieces != 0 {
 		sq := lsb(pieces)
 
-		// bishop material and pst tables
+		// bishop material
 		add(e, side, EvalMaterial, pieceValMG[B], pieceValEG[B])
 
 		// Piece/square adjustement for predefined pawn centers
@@ -489,7 +490,7 @@ func evaluatePieces(p *Pos, e *EvalData, side int) {
 	for pieces != 0 {
 		sq := lsb(pieces)
 
-		// rook material and pst
+		// rook material
 		add(e, side, EvalMaterial, pieceValMG[R], pieceValEG[R])
 
 		// rook board control
@@ -526,7 +527,7 @@ func evaluatePieces(p *Pos, e *EvalData, side int) {
 	for pieces != 0 {
 		sq := lsb(pieces)
 
-		// queen material and pst
+		// queen material
 		add(e, side, EvalMaterial, pieceValMG[Q], pieceValEG[Q])
 
 		// queen square control
@@ -572,11 +573,7 @@ func evaluatePawnStructure(p *Pos, e *EvalData, ss *SearchState) {
 func initCenterType(p *Pos, e *EvalData) {
 
 	// default
-	e.center[White] = Undefined
-	e.center[Black] = Undefined
-
-	narrow := fileDBB | fileEBB         // narrow center (d-e files)
-	wide := fileCBB | fileDBB | fileEBB // wide center (c-d-e files)
+	setCenterType(e, Undefined, Undefined)
 
 	// may be overridden by French
 	if isPawnRam(p, D4, D5) {
@@ -589,8 +586,8 @@ func initCenterType(p *Pos, e *EvalData) {
 	}
 
 	// detect closed centers (KID / French)
-	if popCount(p.pieceBB(White, P)&narrow) == 2 &&
-		popCount(p.pieceBB(Black, P)&narrow) == 2 {
+	if popCount(p.pieceBB(White, P)&narrowCenter) == 2 &&
+		popCount(p.pieceBB(Black, P)&narrowCenter) == 2 {
 
 		if isPawnRam(p, E4, E5) {
 			if isPawnRam(p, D5, D6) {
@@ -610,8 +607,8 @@ func initCenterType(p *Pos, e *EvalData) {
 	}
 
 	// detect Sicilian center
-	if popCount(p.pieceBB(White, P)&wide) == 2 &&
-		popCount(p.pieceBB(Black, P)&wide) == 2 {
+	if popCount(p.pieceBB(White, P)&wideCenter) == 2 &&
+		popCount(p.pieceBB(Black, P)&wideCenter) == 2 {
 
 		if popCount(p.pieceBB(White, P)&fileDBB) == 0 &&
 			popCount(p.pieceBB(Black, P)&fileCBB) == 0 &&
