@@ -272,6 +272,11 @@ func eval_internal(p *Pos, shouldReport bool, ss *SearchState) int {
 	evaluatePassers(p, &e, White)
 	evaluatePassers(p, &e, Black)
 
+	// king safety needs attack update here,
+	// not within evaluateKing(), for the latter to be fully symmetric
+	e.addAttacks(White, K, kingAtk[p.kingSq[White]])
+	e.addAttacks(Black, K, kingAtk[p.kingSq[Black]])
+
 	// King safety evaluation (~36 Elo)
 	evaluateKing(p, &e, White)
 	evaluateKing(p, &e, Black)
@@ -810,7 +815,7 @@ func pawnShieldMG(p *Pos, side int) int {
 		// pawns protecting the king should not advance,
 		// so they are penalized for it
 		if hasPawnR2 {
-			penalty = shieldRank2
+			penalty += shieldRank2
 		} else if hasPawnR3 {
 			penalty += shieldRank3				
 		} else if hasPawnR4 {
@@ -823,12 +828,6 @@ func pawnShieldMG(p *Pos, side int) int {
 			penalty += shieldRank7
 		} else {
 			penalty += shieldNoPawn
-		}
-
-		// king's file penalty is bigger
-		if fileMask & p.king(side) > 0 {
-			penalty *= 12
-			penalty /= 10
 		}
 
 		// penalty for enemy pawns storming our king's position
@@ -853,7 +852,6 @@ func pawnShieldMG(p *Pos, side int) int {
 // evaluatePieces.
 func evaluateKing(p *Pos, e *EvalData, side int) {
 	sq := p.kingSq[side]
-	e.addAttacks(side, K, kingAtk[sq])
 
 	// King-attack danger: pressure accumulated by the *enemy* on our
 	// king ring.  We only trigger this when at least two distinct pieces
