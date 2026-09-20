@@ -33,7 +33,7 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-//go:embed nets/rodent_4kb_768hl_8ob_v5.bin
+//go:embed nets/rodent_8kb_512hl_8ob_v7.bin
 var embeddedNet []byte
 
 // NNUE size and scale. AVX2 code supports following net sizes:
@@ -42,7 +42,7 @@ const (
 	NNUEInputBuckets   = 8
 	NNUEInputSize      = 768
 	TotalInputFeatures = NNUEInputBuckets * NNUEInputSize // 6144 features
-	NNUEHiddenSize     = 768
+	NNUEHiddenSize     = 512
 	OutputBuckets      = 8
 	NNUEL0Scale        = 255
 	NNUEL1Scale        = 64
