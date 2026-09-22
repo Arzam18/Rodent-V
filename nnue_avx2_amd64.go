@@ -273,3 +273,19 @@ func getEvalAVX2_1024(
 	w0, w1 *int16,
 	sum *int32,
 )
+
+// MULTILAYER EVAL (512 inputs -> 16 -> 32 -> 1) WITH DUAL ACTIVATION & PAIRWISE GATING
+//
+//go:noescape
+func getEvalMultilayerAVX2(
+	a0, a1 *int16,
+	l1w *int8,
+	l1b *float32,
+	l2w *float32,
+	l2b *float32,
+	l3w *float32,
+	l3b float32,
+	scale float32,
+	sum *int32,
+)
+

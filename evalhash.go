@@ -2,8 +2,9 @@ package main
 
 type EvalHashEntry struct {
 	key   uint64
-	score int
+	score int32
 	used  bool
+	_     [3]byte
 }
 
 type PawnHashEntry struct {
@@ -53,9 +54,9 @@ func (t *evalHashTable) probe(key uint64) (int, bool) {
 	if len(t.entries) == 0 {
 		return 0, false
 	}
-	e := t.entries[key&t.mask]
+	e := &t.entries[key&t.mask]
 	if e.used && e.key == key {
-		return e.score, true
+		return int(e.score), true
 	}
 	return 0, false
 }
@@ -64,7 +65,10 @@ func (t *evalHashTable) store(key uint64, score int) {
 	if len(t.entries) == 0 {
 		return
 	}
-	t.entries[key&t.mask] = EvalHashEntry{key: key, score: score, used: true}
+	e := &t.entries[key&t.mask]
+	e.key = key
+	e.score = int32(score)
+	e.used = true
 }
 
 func (t *evalHashTable) clear() {

@@ -15,6 +15,587 @@ addsingle64_loop:
 	VZEROUPPER
 	RET
 
+// func getEvalMultilayerAVX2(
+//     a0, a1 *int16,
+//     l1w *int8,
+//     l1b *float32,
+//     l2w *float32,
+//     l2b *float32,
+//     l3w *float32,
+//     l3b float32,
+//     scale float32,
+//     sum *int32,
+// )
+//
+// 512 inputs pairwise-gated -> 16 neurons L1 with Dual Activation (CReLU + SCReLU -> 32)
+// -> 32 neurons L2 with CReLU -> 1 output L3.
+TEXT ·getEvalMultilayerAVX2(SB), NOSPLIT, $0-72
+	MOVQ a0+0(FP), AX
+	MOVQ a1+8(FP), BX
+	MOVQ l1w+16(FP), CX
+	MOVQ l1b+24(FP), DX
+
+	// Zero out Y14 (zeros for clamp)
+	VPXOR Y14, Y14, Y14
+
+	// Y15 = sixteen int16 values equal to 255 for clamp
+	MOVL $255, R10
+	VMOVD R10, X15
+	VPBROADCASTW X15, Y15
+
+	// Y13 = sixteen int16 values equal to 1 for VPMADDWD
+	MOVL $1, R10
+	VMOVD R10, X13
+	VPBROADCASTW X13, Y13
+
+	// Initialize int32 accumulators to 0:
+	// Y8:  neurons 0..7 (even chunks)
+	// Y9:  neurons 8..15 (even chunks)
+	// Y6:  neurons 0..7 (odd chunks)
+	// Y7:  neurons 8..15 (odd chunks)
+	VPXOR Y8, Y8, Y8
+	VPXOR Y9, Y9, Y9
+	VPXOR Y6, Y6, Y6
+	VPXOR Y7, Y7, Y7
+
+	// ------------------------------------------------------------
+	// STM Accumulator Pairwise Gating & L1 Accumulation (inputs 0..255)
+	// ------------------------------------------------------------
+	XORQ R9, R9
+
+ml_stm_loop:
+	// --- Chunks 0..3 (inputs 0..15) ---
+	VMOVDQU (AX)(R9*1), Y0
+	VMOVDQU 512(AX)(R9*1), Y1
+
+	VPMAXSW Y14, Y0, Y0
+	VPMINSW Y15, Y0, Y0
+	VPMAXSW Y14, Y1, Y1
+	VPMINSW Y15, Y1, Y1
+
+	VPMULLW Y1, Y0, Y2
+	VPSRLW $8, Y2, Y2
+	VPACKUSWB Y2, Y2, Y2
+
+	VEXTRACTI128 $1, Y2, X3
+
+	// --- Chunk 0 (Dword 0 of X2) ---
+	VPBROADCASTD X2, Y0
+	VPMADDUBSW (CX), Y0, Y1
+	VPMADDUBSW 32(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y8, Y8
+	VPADDD Y4, Y9, Y9
+
+	// --- Chunk 1 (Dword 1 of X2) ---
+	VPSHUFD $0x55, X2, X0
+	VPBROADCASTD X0, Y0
+	VPMADDUBSW 64(CX), Y0, Y1
+	VPMADDUBSW 96(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y6, Y6
+	VPADDD Y4, Y7, Y7
+
+	// --- Chunk 2 (Dword 0 of X3) ---
+	VPBROADCASTD X3, Y0
+	VPMADDUBSW 128(CX), Y0, Y1
+	VPMADDUBSW 160(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y8, Y8
+	VPADDD Y4, Y9, Y9
+
+	// --- Chunk 3 (Dword 1 of X3) ---
+	VPSHUFD $0x55, X3, X0
+	VPBROADCASTD X0, Y0
+	VPMADDUBSW 192(CX), Y0, Y1
+	VPMADDUBSW 224(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y6, Y6
+	VPADDD Y4, Y7, Y7
+
+	// --- Chunks 4..7 (inputs 16..31) ---
+	VMOVDQU 32(AX)(R9*1), Y0
+	VMOVDQU 544(AX)(R9*1), Y1
+
+	VPMAXSW Y14, Y0, Y0
+	VPMINSW Y15, Y0, Y0
+	VPMAXSW Y14, Y1, Y1
+	VPMINSW Y15, Y1, Y1
+
+	VPMULLW Y1, Y0, Y2
+	VPSRLW $8, Y2, Y2
+	VPACKUSWB Y2, Y2, Y2
+
+	VEXTRACTI128 $1, Y2, X3
+
+	// --- Chunk 4 (Dword 0 of X2) ---
+	VPBROADCASTD X2, Y0
+	VPMADDUBSW 256(CX), Y0, Y1
+	VPMADDUBSW 288(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y8, Y8
+	VPADDD Y4, Y9, Y9
+
+	// --- Chunk 5 (Dword 1 of X2) ---
+	VPSHUFD $0x55, X2, X0
+	VPBROADCASTD X0, Y0
+	VPMADDUBSW 320(CX), Y0, Y1
+	VPMADDUBSW 352(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y6, Y6
+	VPADDD Y4, Y7, Y7
+
+	// --- Chunk 6 (Dword 0 of X3) ---
+	VPBROADCASTD X3, Y0
+	VPMADDUBSW 384(CX), Y0, Y1
+	VPMADDUBSW 416(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y8, Y8
+	VPADDD Y4, Y9, Y9
+
+	// --- Chunk 7 (Dword 1 of X3) ---
+	VPSHUFD $0x55, X3, X0
+	VPBROADCASTD X0, Y0
+	VPMADDUBSW 448(CX), Y0, Y1
+	VPMADDUBSW 480(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y6, Y6
+	VPADDD Y4, Y7, Y7
+
+	ADDQ $512, CX
+	ADDQ $64, R9
+	CMPQ R9, $512
+	JL ml_stm_loop
+
+	// ------------------------------------------------------------
+	// NTM Accumulator Pairwise Gating & L1 Accumulation (inputs 256..511)
+	// ------------------------------------------------------------
+	XORQ R9, R9
+
+ml_ntm_loop:
+	// --- Chunks 0..3 (inputs 0..15) ---
+	VMOVDQU (BX)(R9*1), Y0
+	VMOVDQU 512(BX)(R9*1), Y1
+
+	VPMAXSW Y14, Y0, Y0
+	VPMINSW Y15, Y0, Y0
+	VPMAXSW Y14, Y1, Y1
+	VPMINSW Y15, Y1, Y1
+
+	VPMULLW Y1, Y0, Y2
+	VPSRLW $8, Y2, Y2
+	VPACKUSWB Y2, Y2, Y2
+
+	VEXTRACTI128 $1, Y2, X3
+
+	// --- Chunk 0 (Dword 0 of X2) ---
+	VPBROADCASTD X2, Y0
+	VPMADDUBSW (CX), Y0, Y1
+	VPMADDUBSW 32(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y8, Y8
+	VPADDD Y4, Y9, Y9
+
+	// --- Chunk 1 (Dword 1 of X2) ---
+	VPSHUFD $0x55, X2, X0
+	VPBROADCASTD X0, Y0
+	VPMADDUBSW 64(CX), Y0, Y1
+	VPMADDUBSW 96(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y6, Y6
+	VPADDD Y4, Y7, Y7
+
+	// --- Chunk 2 (Dword 0 of X3) ---
+	VPBROADCASTD X3, Y0
+	VPMADDUBSW 128(CX), Y0, Y1
+	VPMADDUBSW 160(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y8, Y8
+	VPADDD Y4, Y9, Y9
+
+	// --- Chunk 3 (Dword 1 of X3) ---
+	VPSHUFD $0x55, X3, X0
+	VPBROADCASTD X0, Y0
+	VPMADDUBSW 192(CX), Y0, Y1
+	VPMADDUBSW 224(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y6, Y6
+	VPADDD Y4, Y7, Y7
+
+	// --- Chunks 4..7 (inputs 16..31) ---
+	VMOVDQU 32(BX)(R9*1), Y0
+	VMOVDQU 544(BX)(R9*1), Y1
+
+	VPMAXSW Y14, Y0, Y0
+	VPMINSW Y15, Y0, Y0
+	VPMAXSW Y14, Y1, Y1
+	VPMINSW Y15, Y1, Y1
+
+	VPMULLW Y1, Y0, Y2
+	VPSRLW $8, Y2, Y2
+	VPACKUSWB Y2, Y2, Y2
+
+	VEXTRACTI128 $1, Y2, X3
+
+	// --- Chunk 4 (Dword 0 of X2) ---
+	VPBROADCASTD X2, Y0
+	VPMADDUBSW 256(CX), Y0, Y1
+	VPMADDUBSW 288(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y8, Y8
+	VPADDD Y4, Y9, Y9
+
+	// --- Chunk 5 (Dword 1 of X2) ---
+	VPSHUFD $0x55, X2, X0
+	VPBROADCASTD X0, Y0
+	VPMADDUBSW 320(CX), Y0, Y1
+	VPMADDUBSW 352(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y6, Y6
+	VPADDD Y4, Y7, Y7
+
+	// --- Chunk 6 (Dword 0 of X3) ---
+	VPBROADCASTD X3, Y0
+	VPMADDUBSW 384(CX), Y0, Y1
+	VPMADDUBSW 416(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y8, Y8
+	VPADDD Y4, Y9, Y9
+
+	// --- Chunk 7 (Dword 1 of X3) ---
+	VPSHUFD $0x55, X3, X0
+	VPBROADCASTD X0, Y0
+	VPMADDUBSW 448(CX), Y0, Y1
+	VPMADDUBSW 480(CX), Y0, Y4
+	VPMADDWD Y13, Y1, Y1
+	VPMADDWD Y13, Y4, Y4
+	VPADDD Y1, Y6, Y6
+	VPADDD Y4, Y7, Y7
+
+	ADDQ $512, CX
+	ADDQ $64, R9
+	CMPQ R9, $512
+	JL ml_ntm_loop
+
+	// Sum partial accumulators Y6+Y8 -> Y8, and Y7+Y9 -> Y9
+	VPADDD Y6, Y8, Y8
+	VPADDD Y7, Y9, Y9
+
+	// Convert int32 to float32
+	VCVTDQ2PS Y8, Y8
+	VCVTDQ2PS Y9, Y9
+
+	// Y12 = L1_FACTOR = float32(4.0 / 65025.0) = 0x38810182
+	MOVL $0x38810182, R10
+	VMOVD R10, X12
+	VBROADCASTSS X12, Y12
+
+	VMULPS Y12, Y8, Y8
+	VMULPS Y12, Y9, Y9
+
+	// Add L1 biases
+	VADDPS (DX), Y8, Y8
+	VADDPS 32(DX), Y9, Y9
+
+	// ------------------------------------------------------------
+	// Dual Activation (CReLU + SCReLU)
+	// ------------------------------------------------------------
+	// Y14 = eight 0.0f
+	VXORPS Y14, Y14, Y14
+
+	// Y15 = eight 1.0f (0x3f800000)
+	MOVL $0x3f800000, R10
+	VMOVD R10, X15
+	VBROADCASTSS X15, Y15
+
+	VMAXPS Y14, Y8, Y10
+	VMINPS Y15, Y10, Y10
+	VMULPS Y10, Y10, Y12
+
+	VMAXPS Y14, Y9, Y11
+	VMINPS Y15, Y11, Y11
+	VMULPS Y11, Y11, Y13
+
+	// ------------------------------------------------------------
+	// Layer 2 (32 -> 32) Outer-Product SIMD
+	// Direct YMM accumulation with zero horizontal reductions
+	// ------------------------------------------------------------
+	MOVQ l2b+40(FP), DI
+	VMOVUPS (DI), Y0     // output neurons 0..7
+	VMOVUPS 32(DI), Y1   // output neurons 8..15
+	VMOVUPS 64(DI), Y2   // output neurons 16..23
+	VMOVUPS 96(DI), Y3   // output neurons 24..31
+
+	MOVQ l2w+32(FP), SI  // points to row 0 of L2 weights
+
+	// --- Block 0: Inputs 0..7 (from Y10) ---
+	VBROADCASTSS X10, Y4
+	VPSHUFD $0x55, X10, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS (SI), Y4, Y0
+	VFMADD231PS 32(SI), Y4, Y1
+	VFMADD231PS 64(SI), Y4, Y2
+	VFMADD231PS 96(SI), Y4, Y3
+	VFMADD231PS 128(SI), Y5, Y0
+	VFMADD231PS 160(SI), Y5, Y1
+	VFMADD231PS 192(SI), Y5, Y2
+	VFMADD231PS 224(SI), Y5, Y3
+	VPSHUFD $0xAA, X10, X6
+	VBROADCASTSS X6, Y4
+	VPSHUFD $0xFF, X10, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 256(SI), Y4, Y0
+	VFMADD231PS 288(SI), Y4, Y1
+	VFMADD231PS 320(SI), Y4, Y2
+	VFMADD231PS 352(SI), Y4, Y3
+	VFMADD231PS 384(SI), Y5, Y0
+	VFMADD231PS 416(SI), Y5, Y1
+	VFMADD231PS 448(SI), Y5, Y2
+	VFMADD231PS 480(SI), Y5, Y3
+	VEXTRACTI128 $1, Y10, X7
+	VBROADCASTSS X7, Y4
+	VPSHUFD $0x55, X7, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 512(SI), Y4, Y0
+	VFMADD231PS 544(SI), Y4, Y1
+	VFMADD231PS 576(SI), Y4, Y2
+	VFMADD231PS 608(SI), Y4, Y3
+	VFMADD231PS 640(SI), Y5, Y0
+	VFMADD231PS 672(SI), Y5, Y1
+	VFMADD231PS 704(SI), Y5, Y2
+	VFMADD231PS 736(SI), Y5, Y3
+	VPSHUFD $0xAA, X7, X6
+	VBROADCASTSS X6, Y4
+	VPSHUFD $0xFF, X7, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 768(SI), Y4, Y0
+	VFMADD231PS 800(SI), Y4, Y1
+	VFMADD231PS 832(SI), Y4, Y2
+	VFMADD231PS 864(SI), Y4, Y3
+	VFMADD231PS 896(SI), Y5, Y0
+	VFMADD231PS 928(SI), Y5, Y1
+	VFMADD231PS 960(SI), Y5, Y2
+	VFMADD231PS 992(SI), Y5, Y3
+
+	ADDQ $1024, SI
+
+	// --- Block 1: Inputs 8..15 (from Y11) ---
+	VBROADCASTSS X11, Y4
+	VPSHUFD $0x55, X11, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS (SI), Y4, Y0
+	VFMADD231PS 32(SI), Y4, Y1
+	VFMADD231PS 64(SI), Y4, Y2
+	VFMADD231PS 96(SI), Y4, Y3
+	VFMADD231PS 128(SI), Y5, Y0
+	VFMADD231PS 160(SI), Y5, Y1
+	VFMADD231PS 192(SI), Y5, Y2
+	VFMADD231PS 224(SI), Y5, Y3
+	VPSHUFD $0xAA, X11, X6
+	VBROADCASTSS X6, Y4
+	VPSHUFD $0xFF, X11, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 256(SI), Y4, Y0
+	VFMADD231PS 288(SI), Y4, Y1
+	VFMADD231PS 320(SI), Y4, Y2
+	VFMADD231PS 352(SI), Y4, Y3
+	VFMADD231PS 384(SI), Y5, Y0
+	VFMADD231PS 416(SI), Y5, Y1
+	VFMADD231PS 448(SI), Y5, Y2
+	VFMADD231PS 480(SI), Y5, Y3
+	VEXTRACTI128 $1, Y11, X7
+	VBROADCASTSS X7, Y4
+	VPSHUFD $0x55, X7, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 512(SI), Y4, Y0
+	VFMADD231PS 544(SI), Y4, Y1
+	VFMADD231PS 576(SI), Y4, Y2
+	VFMADD231PS 608(SI), Y4, Y3
+	VFMADD231PS 640(SI), Y5, Y0
+	VFMADD231PS 672(SI), Y5, Y1
+	VFMADD231PS 704(SI), Y5, Y2
+	VFMADD231PS 736(SI), Y5, Y3
+	VPSHUFD $0xAA, X7, X6
+	VBROADCASTSS X6, Y4
+	VPSHUFD $0xFF, X7, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 768(SI), Y4, Y0
+	VFMADD231PS 800(SI), Y4, Y1
+	VFMADD231PS 832(SI), Y4, Y2
+	VFMADD231PS 864(SI), Y4, Y3
+	VFMADD231PS 896(SI), Y5, Y0
+	VFMADD231PS 928(SI), Y5, Y1
+	VFMADD231PS 960(SI), Y5, Y2
+	VFMADD231PS 992(SI), Y5, Y3
+
+	ADDQ $1024, SI
+
+	// --- Block 2: Inputs 16..23 (from Y12) ---
+	VBROADCASTSS X12, Y4
+	VPSHUFD $0x55, X12, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS (SI), Y4, Y0
+	VFMADD231PS 32(SI), Y4, Y1
+	VFMADD231PS 64(SI), Y4, Y2
+	VFMADD231PS 96(SI), Y4, Y3
+	VFMADD231PS 128(SI), Y5, Y0
+	VFMADD231PS 160(SI), Y5, Y1
+	VFMADD231PS 192(SI), Y5, Y2
+	VFMADD231PS 224(SI), Y5, Y3
+	VPSHUFD $0xAA, X12, X6
+	VBROADCASTSS X6, Y4
+	VPSHUFD $0xFF, X12, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 256(SI), Y4, Y0
+	VFMADD231PS 288(SI), Y4, Y1
+	VFMADD231PS 320(SI), Y4, Y2
+	VFMADD231PS 352(SI), Y4, Y3
+	VFMADD231PS 384(SI), Y5, Y0
+	VFMADD231PS 416(SI), Y5, Y1
+	VFMADD231PS 448(SI), Y5, Y2
+	VFMADD231PS 480(SI), Y5, Y3
+	VEXTRACTI128 $1, Y12, X7
+	VBROADCASTSS X7, Y4
+	VPSHUFD $0x55, X7, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 512(SI), Y4, Y0
+	VFMADD231PS 544(SI), Y4, Y1
+	VFMADD231PS 576(SI), Y4, Y2
+	VFMADD231PS 608(SI), Y4, Y3
+	VFMADD231PS 640(SI), Y5, Y0
+	VFMADD231PS 672(SI), Y5, Y1
+	VFMADD231PS 704(SI), Y5, Y2
+	VFMADD231PS 736(SI), Y5, Y3
+	VPSHUFD $0xAA, X7, X6
+	VBROADCASTSS X6, Y4
+	VPSHUFD $0xFF, X7, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 768(SI), Y4, Y0
+	VFMADD231PS 800(SI), Y4, Y1
+	VFMADD231PS 832(SI), Y4, Y2
+	VFMADD231PS 864(SI), Y4, Y3
+	VFMADD231PS 896(SI), Y5, Y0
+	VFMADD231PS 928(SI), Y5, Y1
+	VFMADD231PS 960(SI), Y5, Y2
+	VFMADD231PS 992(SI), Y5, Y3
+
+	ADDQ $1024, SI
+
+	// --- Block 3: Inputs 24..31 (from Y13) ---
+	VBROADCASTSS X13, Y4
+	VPSHUFD $0x55, X13, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS (SI), Y4, Y0
+	VFMADD231PS 32(SI), Y4, Y1
+	VFMADD231PS 64(SI), Y4, Y2
+	VFMADD231PS 96(SI), Y4, Y3
+	VFMADD231PS 128(SI), Y5, Y0
+	VFMADD231PS 160(SI), Y5, Y1
+	VFMADD231PS 192(SI), Y5, Y2
+	VFMADD231PS 224(SI), Y5, Y3
+	VPSHUFD $0xAA, X13, X6
+	VBROADCASTSS X6, Y4
+	VPSHUFD $0xFF, X13, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 256(SI), Y4, Y0
+	VFMADD231PS 288(SI), Y4, Y1
+	VFMADD231PS 320(SI), Y4, Y2
+	VFMADD231PS 352(SI), Y4, Y3
+	VFMADD231PS 384(SI), Y5, Y0
+	VFMADD231PS 416(SI), Y5, Y1
+	VFMADD231PS 448(SI), Y5, Y2
+	VFMADD231PS 480(SI), Y5, Y3
+	VEXTRACTI128 $1, Y13, X7
+	VBROADCASTSS X7, Y4
+	VPSHUFD $0x55, X7, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 512(SI), Y4, Y0
+	VFMADD231PS 544(SI), Y4, Y1
+	VFMADD231PS 576(SI), Y4, Y2
+	VFMADD231PS 608(SI), Y4, Y3
+	VFMADD231PS 640(SI), Y5, Y0
+	VFMADD231PS 672(SI), Y5, Y1
+	VFMADD231PS 704(SI), Y5, Y2
+	VFMADD231PS 736(SI), Y5, Y3
+	VPSHUFD $0xAA, X7, X6
+	VBROADCASTSS X6, Y4
+	VPSHUFD $0xFF, X7, X6
+	VBROADCASTSS X6, Y5
+	VFMADD231PS 768(SI), Y4, Y0
+	VFMADD231PS 800(SI), Y4, Y1
+	VFMADD231PS 832(SI), Y4, Y2
+	VFMADD231PS 864(SI), Y4, Y3
+	VFMADD231PS 896(SI), Y5, Y0
+	VFMADD231PS 928(SI), Y5, Y1
+	VFMADD231PS 960(SI), Y5, Y2
+	VFMADD231PS 992(SI), Y5, Y3
+
+
+	// ------------------------------------------------------------
+	// CReLU on Layer 2 Neurons (Y0, Y1, Y2, Y3)
+	// ------------------------------------------------------------
+	VMAXPS Y14, Y0, Y0
+	VMINPS Y15, Y0, Y0
+	VMAXPS Y14, Y1, Y1
+	VMINPS Y15, Y1, Y1
+	VMAXPS Y14, Y2, Y2
+	VMINPS Y15, Y2, Y2
+	VMAXPS Y14, Y3, Y3
+	VMINPS Y15, Y3, Y3
+
+	// ------------------------------------------------------------
+	// Layer 3 (32 -> 1)
+	// ------------------------------------------------------------
+	MOVQ l3w+48(FP), R8
+	VMULPS (R8), Y0, Y0
+	VFMADD231PS 32(R8), Y1, Y0
+	VFMADD231PS 64(R8), Y2, Y0
+	VFMADD231PS 96(R8), Y3, Y0
+
+	// Reduce eight float32 lanes to one
+	VEXTRACTI128 $1, Y0, X1
+	VADDPS X1, X0, X0
+
+	VPSHUFD $0x4E, X0, X1
+	VADDPS X1, X0, X0
+
+	VPSHUFD $0xB1, X0, X1
+	VADDSS X1, X0, X0
+
+	// Add L3 bias
+	VADDSS l3b+56(FP), X0, X0
+
+	// ------------------------------------------------------------
+	// Centipawn Scaling and Output
+	// ------------------------------------------------------------
+	VMOVSS scale+60(FP), X1
+	VMULSS X1, X0, X0
+
+	VCVTTSS2SI X0, AX
+
+	MOVQ sum+64(FP), R10
+	MOVL AX, (R10)
+
+	VZEROUPPER
+	RET
+
+
+
 TEXT ·subSingleAVX2_64(SB), NOSPLIT, $0-16
 	MOVQ a+0(FP), AX
 	MOVQ w+8(FP), CX
@@ -123,9 +704,12 @@ TEXT ·addSingleAVX2_512(SB), NOSPLIT, $0-16
 	XORQ R8, R8
 addsingle512_loop:
 	VMOVDQU (AX)(R8*1), Y0
+	VMOVDQU 32(AX)(R8*1), Y1
 	VPADDW  (CX)(R8*1), Y0, Y0
+	VPADDW  32(CX)(R8*1), Y1, Y1
 	VMOVDQU Y0, (AX)(R8*1)
-	ADDQ $32, R8
+	VMOVDQU Y1, 32(AX)(R8*1)
+	ADDQ $64, R8
 	CMPQ R8, $1024
 	JB addsingle512_loop
 	VZEROUPPER
@@ -137,9 +721,12 @@ TEXT ·subSingleAVX2_512(SB), NOSPLIT, $0-16
 	XORQ R8, R8
 subsingle512_loop:
 	VMOVDQU (AX)(R8*1), Y0
+	VMOVDQU 32(AX)(R8*1), Y1
 	VPSUBW  (CX)(R8*1), Y0, Y0
+	VPSUBW  32(CX)(R8*1), Y1, Y1
 	VMOVDQU Y0, (AX)(R8*1)
-	ADDQ $32, R8
+	VMOVDQU Y1, 32(AX)(R8*1)
+	ADDQ $64, R8
 	CMPQ R8, $1024
 	JB subsingle512_loop
 	VZEROUPPER
@@ -210,6 +797,7 @@ subsingle1024_loop:
 
 	VZEROUPPER
 	RET
+
 
 // Each array contains 64 int16 values = 128 bytes.
 // One YMM register holds 16 int16 values = 32 bytes.
@@ -851,19 +1439,27 @@ TEXT ·moveAVX2_512_3op(SB), NOSPLIT, $0-64
 	XORQ R10, R10
 
 move3_loop_512:
-	// Perspective 0: dst0 = src0 + wTo0 - wFrom0
+	// Perspective 0: dst0 = src0 + wTo0 - wFrom0 (64 bytes)
 	VMOVDQU (BX)(R10*1), Y0
+	VMOVDQU 32(BX)(R10*1), Y2
 	VPADDW  (DI)(R10*1), Y0, Y0
+	VPADDW  32(DI)(R10*1), Y2, Y2
 	VPSUBW  (SI)(R10*1), Y0, Y0
+	VPSUBW  32(SI)(R10*1), Y2, Y2
 	VMOVDQU Y0, (AX)(R10*1)
+	VMOVDQU Y2, 32(AX)(R10*1)
 
-	// Perspective 1: dst1 = src1 + wTo1 - wFrom1
+	// Perspective 1: dst1 = src1 + wTo1 - wFrom1 (64 bytes)
 	VMOVDQU (DX)(R10*1), Y1
+	VMOVDQU 32(DX)(R10*1), Y3
 	VPADDW  (R9)(R10*1), Y1, Y1
+	VPADDW  32(R9)(R10*1), Y3, Y3
 	VPSUBW  (R8)(R10*1), Y1, Y1
+	VPSUBW  32(R8)(R10*1), Y3, Y3
 	VMOVDQU Y1, (CX)(R10*1)
+	VMOVDQU Y3, 32(CX)(R10*1)
 
-	ADDQ $32, R10
+	ADDQ $64, R10
 	CMPQ R10, $1024
 	JB move3_loop_512
 
@@ -887,21 +1483,31 @@ TEXT ·captureAVX2_512_3op(SB), NOSPLIT, $0-80
 	XORQ R12, R12
 
 capture3_loop_512:
-	// Perspective 0: dst0 = src0 + wTo0 - wFrom0 - wCap0
+	// Perspective 0: dst0 = src0 + wTo0 - wFrom0 - wCap0 (64 bytes)
 	VMOVDQU (BX)(R12*1), Y0
+	VMOVDQU 32(BX)(R12*1), Y2
 	VPADDW  (SI)(R12*1), Y0, Y0
+	VPADDW  32(SI)(R12*1), Y2, Y2
 	VPSUBW  (DI)(R12*1), Y0, Y0
+	VPSUBW  32(DI)(R12*1), Y2, Y2
 	VPSUBW  (R8)(R12*1), Y0, Y0
+	VPSUBW  32(R8)(R12*1), Y2, Y2
 	VMOVDQU Y0, (AX)(R12*1)
+	VMOVDQU Y2, 32(AX)(R12*1)
 
-	// Perspective 1: dst1 = src1 + wTo1 - wFrom1 - wCap1
+	// Perspective 1: dst1 = src1 + wTo1 - wFrom1 - wCap1 (64 bytes)
 	VMOVDQU (DX)(R12*1), Y1
+	VMOVDQU 32(DX)(R12*1), Y3
 	VPADDW  (R9)(R12*1), Y1, Y1
+	VPADDW  32(R9)(R12*1), Y3, Y3
 	VPSUBW  (R10)(R12*1), Y1, Y1
+	VPSUBW  32(R10)(R12*1), Y3, Y3
 	VPSUBW  (R11)(R12*1), Y1, Y1
+	VPSUBW  32(R11)(R12*1), Y3, Y3
 	VMOVDQU Y1, (CX)(R12*1)
+	VMOVDQU Y3, 32(CX)(R12*1)
 
-	ADDQ $32, R12
+	ADDQ $64, R12
 	CMPQ R12, $1024
 	JB capture3_loop_512
 
@@ -927,25 +1533,35 @@ TEXT ·castleAVX2_512_3op(SB), NOSPLIT, $0-96
 	XORQ R14, R14
 
 castle3_loop_512:
-	// Perspective 0: dst0 = src0 + kingTo - kingFrom + rookTo - rookFrom
+	// Perspective 0: dst0 = src0 + kingTo - kingFrom + rookTo - rookFrom (64 bytes)
 	VMOVDQU (BX)(R14*1), Y0
+	VMOVDQU 32(BX)(R14*1), Y2
 	VPADDW  (DI)(R14*1), Y0, Y0
+	VPADDW  32(DI)(R14*1), Y2, Y2
 	VPSUBW  (SI)(R14*1), Y0, Y0
+	VPSUBW  32(SI)(R14*1), Y2, Y2
 	VPADDW  (R9)(R14*1), Y0, Y0
+	VPADDW  32(R9)(R14*1), Y2, Y2
 	VPSUBW  (R8)(R14*1), Y0, Y0
+	VPSUBW  32(R8)(R14*1), Y2, Y2
 	VMOVDQU Y0, (AX)(R14*1)
+	VMOVDQU Y2, 32(AX)(R14*1)
 
-	// Perspective 1: dst1 = src1 + kingTo - kingFrom + rookTo - rookFrom
+	// Perspective 1: dst1 = src1 + kingTo - kingFrom + rookTo - rookFrom (64 bytes)
 	VMOVDQU (DX)(R14*1), Y1
+	VMOVDQU 32(DX)(R14*1), Y3
 	VPADDW  (R11)(R14*1), Y1, Y1
+	VPADDW  32(R11)(R14*1), Y3, Y3
 	VPSUBW  (R10)(R14*1), Y1, Y1
+	VPSUBW  32(R10)(R14*1), Y3, Y3
 	VPADDW  (R13)(R14*1), Y1, Y1
+	VPADDW  32(R13)(R14*1), Y3, Y3
 	VPSUBW  (R12)(R14*1), Y1, Y1
+	VPSUBW  32(R12)(R14*1), Y3, Y3
 	VMOVDQU Y1, (CX)(R14*1)
+	VMOVDQU Y3, 32(CX)(R14*1)
 
-	ADDQ $32, R14
-
-	// 512 int16 neurons = 1024 bytes
+	ADDQ $64, R14
 	CMPQ R14, $1024
 	JB castle3_loop_512
 
@@ -1326,6 +1942,204 @@ geteval_64_loop:
 
 	VZEROUPPER
 	RET
+
+// Fused AVX2 Evaluation with 4 KS features for 768 neurons
+TEXT ·getEvalAVX2_768_KS(SB), NOSPLIT, $0-104
+	MOVQ a0+0(FP), AX
+	MOVQ a1+8(FP), BX
+	MOVQ w0+16(FP), CX
+	MOVQ w1+24(FP), DX
+	MOVQ sum+32(FP), SI
+
+	// Y14 = sixteen int16 zeros.
+	VPXOR Y14, Y14, Y14
+
+	// Y15 = sixteen int16 values equal to 255.
+	MOVL $255, R8
+	VMOVD R8, X15
+	VPBROADCASTW X15, Y15
+
+	// Y13 = sixteen int16 values equal to 1 for ceil calculation.
+	MOVL $1, R8
+	VMOVD R8, X13
+	VPBROADCASTW X13, Y13
+
+	// Y8 accumulates eight int32 partial sums.
+	VPXOR Y8, Y8, Y8
+
+	XORQ R9, R9
+
+eval768_ks_loop:
+	// Perspective 0 (a0 + ks0_0 + ks0_1 + ks0_2 + ks0_3)
+	VMOVDQU (AX)(R9*1), Y0
+	MOVQ ks0_0+40(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks0_1+48(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks0_2+56(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks0_3+64(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+
+	VMOVDQU (CX)(R9*1), Y1
+
+	// SCReLU clipping
+	VPMAXSW Y14, Y0, Y0
+	VPMINSW Y15, Y0, Y0
+
+	VPSRLW $1, Y0, Y2
+	VPADDW Y13, Y0, Y3
+	VPSRLW $1, Y3, Y3
+
+	VPMULLW Y0, Y2, Y2
+	VPMULLW Y0, Y3, Y3
+
+	VPMADDWD Y1, Y2, Y2
+	VPMADDWD Y1, Y3, Y3
+
+	VPADDD Y2, Y8, Y8
+	VPADDD Y3, Y8, Y8
+
+	// Perspective 1 (a1 + ks1_0 + ks1_1 + ks1_2 + ks1_3)
+	VMOVDQU (BX)(R9*1), Y0
+	MOVQ ks1_0+72(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks1_1+80(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks1_2+88(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks1_3+96(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+
+	VMOVDQU (DX)(R9*1), Y1
+
+	// SCReLU clipping
+	VPMAXSW Y14, Y0, Y0
+	VPMINSW Y15, Y0, Y0
+
+	VPSRLW $1, Y0, Y2
+	VPADDW Y13, Y0, Y3
+	VPSRLW $1, Y3, Y3
+
+	VPMULLW Y0, Y2, Y2
+	VPMULLW Y0, Y3, Y3
+
+	VPMADDWD Y1, Y2, Y2
+	VPMADDWD Y1, Y3, Y3
+
+	VPADDD Y2, Y8, Y8
+	VPADDD Y3, Y8, Y8
+
+	ADDQ $32, R9
+	CMPQ R9, $1536
+	JL eval768_ks_loop
+
+	// Horizontal sum
+	VEXTRACTI128 $1, Y8, X1
+	VPADDD X1, X8, X8
+	VPSHUFD $0x4E, X8, X1
+	VPADDD X1, X8, X8
+	VPSHUFD $0xB1, X8, X1
+	VPADDD X1, X8, X8
+
+	VMOVD X8, R8
+	MOVL R8, (SI)
+
+	VZEROUPPER
+	RET
+
+// Fused AVX2 Evaluation with 4 KS features for 512 neurons
+TEXT ·getEvalAVX2_512_KS(SB), NOSPLIT, $0-104
+	MOVQ a0+0(FP), AX
+	MOVQ a1+8(FP), BX
+	MOVQ w0+16(FP), CX
+	MOVQ w1+24(FP), DX
+	MOVQ sum+32(FP), SI
+
+	VPXOR Y14, Y14, Y14
+	MOVL $255, R8
+	VMOVD R8, X15
+	VPBROADCASTW X15, Y15
+	MOVL $1, R8
+	VMOVD R8, X13
+	VPBROADCASTW X13, Y13
+	VPXOR Y8, Y8, Y8
+	XORQ R9, R9
+
+eval512_ks_loop:
+	VMOVDQU (AX)(R9*1), Y0
+	MOVQ ks0_0+40(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks0_1+48(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks0_2+56(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks0_3+64(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+
+	VMOVDQU (CX)(R9*1), Y1
+
+	VPMAXSW Y14, Y0, Y0
+	VPMINSW Y15, Y0, Y0
+
+	VPSRLW $1, Y0, Y2
+	VPADDW Y13, Y0, Y3
+	VPSRLW $1, Y3, Y3
+
+	VPMULLW Y0, Y2, Y2
+	VPMULLW Y0, Y3, Y3
+
+	VPMADDWD Y1, Y2, Y2
+	VPMADDWD Y1, Y3, Y3
+
+	VPADDD Y2, Y8, Y8
+	VPADDD Y3, Y8, Y8
+
+	VMOVDQU (BX)(R9*1), Y0
+	MOVQ ks1_0+72(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks1_1+80(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks1_2+88(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+	MOVQ ks1_3+96(FP), R10
+	VPADDW (R10)(R9*1), Y0, Y0
+
+	VMOVDQU (DX)(R9*1), Y1
+
+	VPMAXSW Y14, Y0, Y0
+	VPMINSW Y15, Y0, Y0
+
+	VPSRLW $1, Y0, Y2
+	VPADDW Y13, Y0, Y3
+	VPSRLW $1, Y3, Y3
+
+	VPMULLW Y0, Y2, Y2
+	VPMULLW Y0, Y3, Y3
+
+	VPMADDWD Y1, Y2, Y2
+	VPMADDWD Y1, Y3, Y3
+
+	VPADDD Y2, Y8, Y8
+	VPADDD Y3, Y8, Y8
+
+	ADDQ $32, R9
+	CMPQ R9, $1024
+	JL eval512_ks_loop
+
+	VEXTRACTI128 $1, Y8, X1
+	VPADDD X1, X8, X8
+	VPSHUFD $0x4E, X8, X1
+	VPADDD X1, X8, X8
+	VPSHUFD $0xB1, X8, X1
+	VPADDD X1, X8, X8
+
+	VMOVD X8, R8
+	MOVL R8, (SI)
+
+	VZEROUPPER
+	RET
+
 
 	// func getEvalAVX2_128(
 //     a0, a1 *int16,
