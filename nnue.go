@@ -33,41 +33,47 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-//go:embed nets/rodent_4kb_768hl_8ob_v5.bin
+//go:embed nets/rodent_8kb_512hl_8ob_v7.bin
 var embeddedNet []byte
 
 // NNUE size and scale. AVX2 code supports following net sizes:
 // 64, 128, 256, 384, 512, 768
 const (
-	NNUEInputBuckets   = 4
+	NNUEInputBuckets   = 8
 	NNUEInputSize      = 768
-	TotalInputFeatures = NNUEInputBuckets * NNUEInputSize // 3072 features
-	NNUEHiddenSize     = 768
+	TotalInputFeatures = NNUEInputBuckets * NNUEInputSize // 6144 features
+	NNUEHiddenSize     = 512
 	OutputBuckets      = 8
 	NNUEL0Scale        = 255
 	NNUEL1Scale        = 64
 
-	// Minimum parameter byte sizes for 1-bucket and 4-bucket network blobs (2 bytes per int16)
-	SingleBucketNetSize     = (NNUEInputSize*NNUEHiddenSize + NNUEHiddenSize + 2*NNUEHiddenSize + 1) * 2
-	OutputBucketNetSize     = (NNUEInputSize*NNUEHiddenSize + NNUEHiddenSize + OutputBuckets*2*NNUEHiddenSize + OutputBuckets) * 2
-	FourBucketSingleNetSize = (TotalInputFeatures*NNUEHiddenSize + NNUEHiddenSize + 2*NNUEHiddenSize + 1) * 2
-	FourBucketOutputNetSize = (TotalInputFeatures*NNUEHiddenSize + NNUEHiddenSize + OutputBuckets*2*NNUEHiddenSize + OutputBuckets) * 2
+	// Minimum parameter byte sizes for 1-bucket, 4-bucket, and 8-bucket network blobs (2 bytes per int16)
+	SingleBucketNetSize      = (NNUEInputSize*NNUEHiddenSize + NNUEHiddenSize + 2*NNUEHiddenSize + 1) * 2
+	OutputBucketNetSize      = (NNUEInputSize*NNUEHiddenSize + NNUEHiddenSize + OutputBuckets*2*NNUEHiddenSize + OutputBuckets) * 2
+	FourBucketSingleNetSize  = (4*NNUEInputSize*NNUEHiddenSize + NNUEHiddenSize + 2*NNUEHiddenSize + 1) * 2
+	FourBucketOutputNetSize  = (4*NNUEInputSize*NNUEHiddenSize + NNUEHiddenSize + OutputBuckets*2*NNUEHiddenSize + OutputBuckets) * 2
+	EightBucketSingleNetSize = (TotalInputFeatures*NNUEHiddenSize + NNUEHiddenSize + 2*NNUEHiddenSize + 1) * 2
+	EightBucketOutputNetSize = (TotalInputFeatures*NNUEHiddenSize + NNUEHiddenSize + OutputBuckets*2*NNUEHiddenSize + OutputBuckets) * 2
 )
 
-// 4 King Input Buckets Layout
-// Bucket 0: Central King on Rank 1 (c1, d1, e1, f1)
-// Bucket 1: Castled / Flank King on Rank 1 (a1, b1, g1, h1)
-// Bucket 2: 2nd Rank King (a2..h2)
-// Bucket 3: Upper Ranks (Ranks 3..8)
+// 8 King Input Buckets Layout (Horizontally Mirrored across 64 squares)
+// Bucket 0: Corner King on Rank 1 (a1, h1)
+// Bucket 1: Castled King on Rank 1 (b1, g1)
+// Bucket 2: Queenside Castled / Stepped King on Rank 1 (c1, f1)
+// Bucket 3: Central Uncastled King on Rank 1 (d1, e1)
+// Bucket 4: Flank / Fianchetto King on Rank 2 (a2, b2, g2, h2)
+// Bucket 5: Central King on Rank 2 (c2, d2, e2, f2)
+// Bucket 6: Midfield Active King (Ranks 3-4)
+// Bucket 7: Enemy Territory (Ranks 5-8)
 var kingBucketTable = [64]int{
-	1, 1, 0, 0, 0, 0, 1, 1, // Rank 1: a1..h1 (0..7)
-	2, 2, 2, 2, 2, 2, 2, 2, // Rank 2: a2..h2 (8..15)
-	3, 3, 3, 3, 3, 3, 3, 3, // Rank 3: a3..h3 (16..23)
-	3, 3, 3, 3, 3, 3, 3, 3, // Rank 4: a4..h4 (24..31)
-	3, 3, 3, 3, 3, 3, 3, 3, // Rank 5: a5..h5 (32..39)
-	3, 3, 3, 3, 3, 3, 3, 3, // Rank 6: a6..h6 (40..47)
-	3, 3, 3, 3, 3, 3, 3, 3, // Rank 7: a7..h7 (48..55)
-	3, 3, 3, 3, 3, 3, 3, 3, // Rank 8: a8..h8 (56..63)
+	0, 1, 2, 3, 3, 2, 1, 0, // Rank 1: a1..h1 (0..7)
+	4, 4, 5, 5, 5, 5, 4, 4, // Rank 2: a2..h2 (8..15)
+	6, 6, 6, 6, 6, 6, 6, 6, // Rank 3: a3..h3 (16..23)
+	6, 6, 6, 6, 6, 6, 6, 6, // Rank 4: a4..h4 (24..31)
+	7, 7, 7, 7, 7, 7, 7, 7, // Rank 5: a5..h5 (32..39)
+	7, 7, 7, 7, 7, 7, 7, 7, // Rank 6: a6..h6 (40..47)
+	7, 7, 7, 7, 7, 7, 7, 7, // Rank 7: a7..h7 (48..55)
+	7, 7, 7, 7, 7, 7, 7, 7, // Rank 8: a8..h8 (56..63)
 }
 
 // Types of NNUE updates
@@ -872,16 +878,37 @@ func nnueLoadFromBytes(data []byte) bool {
 		return value
 	}
 
-	is4Bucket := len(data) >= FourBucketSingleNetSize
+	is8Bucket := len(data) >= EightBucketSingleNetSize
+	is4Bucket := !is8Bucket && len(data) >= FourBucketSingleNetSize
 
-	if is4Bucket {
+	if is8Bucket {
 		for input := 0; input < TotalInputFeatures; input++ {
 			for neuron := 0; neuron < NNUEHiddenSize; neuron++ {
 				nextParams.InputWeights[input][neuron] = readI16()
 			}
 		}
+	} else if is4Bucket {
+		// Read 4 buckets (4 * 768) and map onto the 8-bucket layout
+		var fourBuckets [4 * NNUEInputSize][NNUEHiddenSize]int16
+		for input := 0; input < 4*NNUEInputSize; input++ {
+			for neuron := 0; neuron < NNUEHiddenSize; neuron++ {
+				fourBuckets[input][neuron] = readI16()
+			}
+		}
+		// 4KB -> 8KB mapping:
+		// 8KB 0, 1 (Rank 1 corner/castled)  <- 4KB Bucket 1 (Rank 1 flank)
+		// 8KB 2, 3 (Rank 1 queenside/center) <- 4KB Bucket 0 (Rank 1 center)
+		// 8KB 4, 5 (Rank 2 flank/center)     <- 4KB Bucket 2 (Rank 2)
+		// 8KB 6, 7 (Ranks 3-8 midfield/enemy) <- 4KB Bucket 3 (Ranks 3-8)
+		bucketMap := [8]int{1, 1, 0, 0, 2, 2, 3, 3}
+		for b := 0; b < 8; b++ {
+			srcB := bucketMap[b]
+			for input := 0; input < NNUEInputSize; input++ {
+				nextParams.InputWeights[b*NNUEInputSize+input] = fourBuckets[srcB*NNUEInputSize+input]
+			}
+		}
 	} else {
-		// 1 Input Bucket - read first bucket and duplicate across all 4 buckets
+		// 1 Input Bucket - read first bucket and duplicate across all 8 buckets
 		for input := 0; input < NNUEInputSize; input++ {
 			for neuron := 0; neuron < NNUEHiddenSize; neuron++ {
 				nextParams.InputWeights[input][neuron] = readI16()
@@ -899,7 +926,9 @@ func nnueLoadFromBytes(data []byte) bool {
 	}
 
 	// 8 Output Buckets vs Single Output Bucket
-	isOutputBuckets := (is4Bucket && len(data) >= FourBucketOutputNetSize) || (!is4Bucket && len(data) >= OutputBucketNetSize)
+	isOutputBuckets := (is8Bucket && len(data) >= EightBucketOutputNetSize) ||
+		(is4Bucket && len(data) >= FourBucketOutputNetSize) ||
+		(!is8Bucket && !is4Bucket && len(data) >= OutputBucketNetSize)
 
 	if isOutputBuckets {
 		for b := 0; b < OutputBuckets; b++ {
