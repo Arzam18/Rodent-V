@@ -87,11 +87,11 @@ func init() {
 	personalityFile = "personalities/rodent.txt"
 	guideBookPath = "books/empty.bin"
 	mainBookPath = "books/empty.bin"
-	nnuePath = "nets/rodent_8kb_512hl_8ob_v7.bin"
+	nnuePath = "nets/rodent_8kb_512pw_multilayer_v8.bin"
 
 	registerSingleOption(HcePerc, "hceWeight", 0, 0, 256, !readPersonalityFiles)
 	registerSingleOption(NnuePerc, "nnueWeight", 100, 0, 256, !readPersonalityFiles)
-	registerSingleOption(NnueScale, "nnueScale", 198, 10, 2000, !readPersonalityFiles)
+	registerSingleOption(NnueScale, "nnueScale", 240, 10, 2000, !readPersonalityFiles)
 	registerSingleOption(NodesLimit, "nodesLimit", 0, 0, 1000*1000*1000, false) // set by Uci_Elo
 	registerSingleOption(LikesClosed, "likesClosed", 0, -256, 256, !readPersonalityFiles)
 	registerSingleOption(KingTropism, "kingTropism", 0, -256, 256, !readPersonalityFiles)

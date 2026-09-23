@@ -135,7 +135,7 @@ func init() {
 	}
 
 	// --- Init pawn and eval hashtables ---
-	initEvalHash(128 * 128)
+	initEvalHash(65536)
 	initPawnHash(64 * 128)
 }
 

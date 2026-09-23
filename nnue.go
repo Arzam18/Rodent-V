@@ -26,6 +26,7 @@ on illegal or pruned moves.
 
 import (
 	_ "embed"
+	"math"
 	"math/bits"
 	"os"
 	"unsafe"
@@ -33,7 +34,7 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-//go:embed nets/rodent_8kb_512hl_8ob_v7.bin
+//go:embed nets/rodent_8kb_512pw_multilayer_v8.bin
 var embeddedNet []byte
 
 // NNUE size and scale. AVX2 code supports following net sizes:
@@ -54,6 +55,29 @@ const (
 	FourBucketOutputNetSize  = (4*NNUEInputSize*NNUEHiddenSize + NNUEHiddenSize + OutputBuckets*2*NNUEHiddenSize + OutputBuckets) * 2
 	EightBucketSingleNetSize = (TotalInputFeatures*NNUEHiddenSize + NNUEHiddenSize + 2*NNUEHiddenSize + 1) * 2
 	EightBucketOutputNetSize = (TotalInputFeatures*NNUEHiddenSize + NNUEHiddenSize + OutputBuckets*2*NNUEHiddenSize + OutputBuckets) * 2
+
+	// Multilayer Dense Head constants ((16 -> 32 -> 1)x8)
+	NNUEMultilayerL1Size   = 16
+	NNUEMultilayerL2Size   = 32
+	NNUEMultilayerL2Inputs = 32 // 16 CReLU + 16 SCReLU when Dual Activation is active
+
+	// Base multilayer (pure SCReLU, 16 inputs to L2): 84,512 dense head bytes -> 6,376,992 bytes
+	MultilayerDenseHeadBaseSize = (NNUEHiddenSize * OutputBuckets * NNUEMultilayerL1Size * 1) +
+		(OutputBuckets * NNUEMultilayerL1Size * 4) +
+		(NNUEMultilayerL1Size * OutputBuckets * NNUEMultilayerL2Size * 4) +
+		(OutputBuckets * NNUEMultilayerL2Size * 4) +
+		(NNUEMultilayerL2Size * OutputBuckets * 4) +
+		(OutputBuckets * 4)
+	MultilayerNetSize = (TotalInputFeatures*NNUEHiddenSize+NNUEHiddenSize)*2 + MultilayerDenseHeadBaseSize
+
+	// Multilayer with Dual Activation (32 inputs to L2): 100,896 dense head bytes -> 6,393,376 bytes
+	MultilayerDenseHeadDualActSize = (NNUEHiddenSize * OutputBuckets * NNUEMultilayerL1Size * 1) +
+		(OutputBuckets * NNUEMultilayerL1Size * 4) +
+		(2 * NNUEMultilayerL1Size * OutputBuckets * NNUEMultilayerL2Size * 4) +
+		(OutputBuckets * NNUEMultilayerL2Size * 4) +
+		(NNUEMultilayerL2Size * OutputBuckets * 4) +
+		(OutputBuckets * 4)
+	MultilayerDualActNetSize = (TotalInputFeatures*NNUEHiddenSize+NNUEHiddenSize)*2 + MultilayerDenseHeadDualActSize
 )
 
 // 8 King Input Buckets Layout (Horizontally Mirrored across 64 squares)
@@ -95,6 +119,18 @@ type NNUEParameters struct {
 	InputBiases   [NNUEHiddenSize]int16
 	OutputWeights [OutputBuckets][2][NNUEHiddenSize]int16
 	OutputBiases  [OutputBuckets]int16
+
+	// Multilayer Dense Head
+	IsMultilayer     bool
+	IsDualActivation bool
+	L1WeightsRaw     [OutputBuckets][NNUEHiddenSize][NNUEMultilayerL1Size]int8
+	L1WeightsTiled   [OutputBuckets][NNUEHiddenSize / 4][2][32]int8
+	L1Weights        [OutputBuckets][NNUEHiddenSize][NNUEMultilayerL1Size]float32
+	L1Biases         [OutputBuckets][NNUEMultilayerL1Size]float32
+	L2Weights        [OutputBuckets][NNUEMultilayerL2Inputs][NNUEMultilayerL2Size]float32
+	L2Biases         [OutputBuckets][NNUEMultilayerL2Size]float32
+	L3Weights        [OutputBuckets][NNUEMultilayerL2Size]float32
+	L3Biases         [OutputBuckets]float32
 }
 
 var nnueParams = &NNUEParameters{}
@@ -833,7 +869,7 @@ func screluWeighted(x, w int16) int32 {
 func outputBucket(p *Pos) int {
 	occupied := p.colorBB[White] | p.colorBB[Black]
 	pieceCount := bits.OnesCount64(occupied)
-	bucket := (pieceCount - 2) / 4
+	bucket := (pieceCount - 2) >> 2
 	if bucket < 0 {
 		return 0
 	}
@@ -845,6 +881,26 @@ func outputBucket(p *Pos) int {
 
 func (acc *Accumulator) getEval(p *Pos, stm int) int {
 	bucket := outputBucket(p)
+	if nnueParams.IsMultilayer {
+		if hasAVX2 && nnueParams.IsDualActivation {
+			var sum int32
+			getEvalMultilayerAVX2(
+				&acc.values[stm][0],
+				&acc.values[stm^1][0],
+				&nnueParams.L1WeightsTiled[bucket][0][0][0],
+				&nnueParams.L1Biases[bucket][0],
+				&nnueParams.L2Weights[bucket][0][0],
+				&nnueParams.L2Biases[bucket][0],
+				&nnueParams.L3Weights[bucket][0],
+				nnueParams.L3Biases[bucket],
+				float32(singleOptionValue[NnueScale]),
+				&sum,
+			)
+			return int(sum)
+		}
+		return acc.getEvalMultilayer(bucket, stm)
+	}
+
 	var sum int32
 
 	nnueEval(
@@ -859,6 +915,145 @@ func (acc *Accumulator) getEval(p *Pos, stm int) int {
 
 	return int(sum * int32(singleOptionValue[NnueScale]) /
 		(NNUEL0Scale * NNUEL1Scale))
+}
+
+func (acc *Accumulator) getEvalMultilayer(bucket, stm int) int {
+	if hasAVX2 && nnueParams.IsDualActivation {
+		var sum int32
+		getEvalMultilayerAVX2(
+			&acc.values[stm][0],
+			&acc.values[stm^1][0],
+			&nnueParams.L1WeightsTiled[bucket][0][0][0],
+			&nnueParams.L1Biases[bucket][0],
+			&nnueParams.L2Weights[bucket][0][0],
+			&nnueParams.L2Biases[bucket][0],
+			&nnueParams.L3Weights[bucket][0],
+			nnueParams.L3Biases[bucket],
+			float32(singleOptionValue[NnueScale]),
+			&sum,
+		)
+		return int(sum)
+	}
+
+	// 1. Pairwise multiplication on accumulator halves into uint8 [0..255]:
+	// stm half 0 * stm half 1 (256 values)
+	// ntm half 0 * ntm half 1 (256 values)
+	var pw [NNUEHiddenSize]uint8
+	stmAcc := &acc.values[stm]
+	ntmAcc := &acc.values[stm^1]
+
+	const halfSize = NNUEHiddenSize / 2
+	for i := 0; i < halfSize; i++ {
+		s0 := stmAcc[i]
+		if s0 < 0 {
+			s0 = 0
+		} else if s0 > 255 {
+			s0 = 255
+		}
+		s1 := stmAcc[i+halfSize]
+		if s1 < 0 {
+			s1 = 0
+		} else if s1 > 255 {
+			s1 = 255
+		}
+		pw[i] = uint8((int32(s0) * int32(s1)) >> 8)
+
+		n0 := ntmAcc[i]
+		if n0 < 0 {
+			n0 = 0
+		} else if n0 > 255 {
+			n0 = 255
+		}
+		n1 := ntmAcc[i+halfSize]
+		if n1 < 0 {
+			n1 = 0
+		} else if n1 > 255 {
+			n1 = 255
+		}
+		pw[halfSize+i] = uint8((int32(n0) * int32(n1)) >> 8)
+	}
+
+	// 2. Layer 1 forward (512 -> 16) with integer accumulation:
+	var intSums [NNUEMultilayerL1Size]int32
+	l1wRaw := &nnueParams.L1WeightsRaw[bucket]
+	for i := 0; i < NNUEHiddenSize; i++ {
+		pwi := int32(pw[i])
+		if pwi == 0 {
+			continue
+		}
+		for j := 0; j < NNUEMultilayerL1Size; j++ {
+			intSums[j] += pwi * int32(l1wRaw[i][j])
+		}
+	}
+
+	// 3. Convert to float32 and add L1 bias:
+	// Scale factor: pw_float = pw_u8 * 256 / (255 * 255)
+	// w_float = w_i8 / 64
+	// Total factor = 256 / (255 * 255 * 64) = 4 / 65025
+	const l1Factor = float32(4.0 / 65025.0)
+	var sums [NNUEMultilayerL1Size]float32
+	l1b := &nnueParams.L1Biases[bucket]
+	for j := 0; j < NNUEMultilayerL1Size; j++ {
+		sums[j] = l1b[j] + float32(intSums[j])*l1Factor
+	}
+
+	var l1Out [NNUEMultilayerL2Inputs]float32
+	for j := 0; j < NNUEMultilayerL1Size; j++ {
+		crelu := sums[j]
+		if crelu < 0.0 {
+			crelu = 0.0
+		} else if crelu > 1.0 {
+			crelu = 1.0
+		}
+		screlu := crelu * crelu
+
+		if nnueParams.IsDualActivation {
+			l1Out[j] = crelu
+			l1Out[j+NNUEMultilayerL1Size] = screlu
+		} else {
+			l1Out[j] = screlu
+		}
+	}
+
+	// 3. Layer 2 forward (32 -> 32 if dual activation, 16 -> 32 if single)
+	var l2Out [NNUEMultilayerL2Size]float32
+	l2Inputs := NNUEMultilayerL1Size
+	if nnueParams.IsDualActivation {
+		l2Inputs = 2 * NNUEMultilayerL1Size
+	}
+	l2w := &nnueParams.L2Weights[bucket]
+	l2b := &nnueParams.L2Biases[bucket]
+
+	copy(l2Out[:], l2b[:])
+	for j := 0; j < l2Inputs; j++ {
+		act := l1Out[j]
+		if act == 0.0 {
+			continue
+		}
+		wRow := &l2w[j]
+		for k := 0; k < NNUEMultilayerL2Size; k++ {
+			l2Out[k] += act * wRow[k]
+		}
+	}
+	for k := 0; k < NNUEMultilayerL2Size; k++ {
+		sum := l2Out[k]
+		if sum < 0.0 {
+			sum = 0.0
+		} else if sum > 1.0 {
+			sum = 1.0
+		}
+		l2Out[k] = sum
+	}
+
+	// 4. Layer 3 forward (32 -> 1)
+	l3w := &nnueParams.L3Weights[bucket]
+	score := nnueParams.L3Biases[bucket]
+	for k := 0; k < NNUEMultilayerL2Size; k++ {
+		score += l2Out[k] * l3w[k]
+	}
+
+	// 5. Scale to centipawns
+	return int(score * float32(singleOptionValue[NnueScale]))
 }
 
 func nnueLoadFromBytes(data []byte) bool {
@@ -876,6 +1071,114 @@ func nnueLoadFromBytes(data []byte) bool {
 		)
 		offset += 2
 		return value
+	}
+
+	readI8 := func() int8 {
+		value := int8(data[offset])
+		offset++
+		return value
+	}
+
+	readF32 := func() float32 {
+		b := uint32(data[offset]) |
+			uint32(data[offset+1])<<8 |
+			uint32(data[offset+2])<<16 |
+			uint32(data[offset+3])<<24
+		offset += 4
+		return math.Float32frombits(b)
+	}
+
+	isDualAct := len(data) >= MultilayerDualActNetSize && len(data) < MultilayerDualActNetSize+64
+	isSingleAct := len(data) >= MultilayerNetSize && len(data) < MultilayerNetSize+64
+	isMultilayer := isDualAct || isSingleAct
+
+	if isMultilayer {
+		// Multilayer 8-bucket architecture
+		for input := 0; input < TotalInputFeatures; input++ {
+			for neuron := 0; neuron < NNUEHiddenSize; neuron++ {
+				nextParams.InputWeights[input][neuron] = readI16()
+			}
+		}
+		for neuron := 0; neuron < NNUEHiddenSize; neuron++ {
+			nextParams.InputBiases[neuron] = readI16()
+		}
+
+		// L1 weights: transposed (128 rows x 512 cols in row-major file view), i8 quantized by 64
+		for b := 0; b < OutputBuckets; b++ {
+			for j := 0; j < NNUEMultilayerL1Size; j++ {
+				for i := 0; i < NNUEHiddenSize; i++ {
+					w := readI8()
+					nextParams.L1WeightsRaw[b][i][j] = w
+					nextParams.L1Weights[b][i][j] = float32(w) / float32(NNUEL1Scale)
+				}
+			}
+		}
+
+		// Pre-tile L1 weights for SIMD (vpmaddubsw / vpdpbusd):
+		// 128 chunks of 4 inputs x 16 neurons
+		for b := 0; b < OutputBuckets; b++ {
+			for k := 0; k < NNUEHiddenSize/4; k++ {
+				// Neurons 0..7 (first 256-bit register)
+				for m := 0; m < 8; m++ {
+					for c := 0; c < 4; c++ {
+						nextParams.L1WeightsTiled[b][k][0][m*4+c] = nextParams.L1WeightsRaw[b][4*k+c][m]
+					}
+				}
+				// Neurons 8..15 (second 256-bit register)
+				for m := 0; m < 8; m++ {
+					for c := 0; c < 4; c++ {
+						nextParams.L1WeightsTiled[b][k][1][m*4+c] = nextParams.L1WeightsRaw[b][4*k+c][8+m]
+					}
+				}
+			}
+		}
+
+		// L1 biases: 128 f32 (8 buckets x 16 neurons)
+		for b := 0; b < OutputBuckets; b++ {
+			for j := 0; j < NNUEMultilayerL1Size; j++ {
+				nextParams.L1Biases[b][j] = readF32()
+			}
+		}
+
+		// L2 weights: transposed (256 rows x l2InCount cols in row-major file view), f32
+		l2InCount := NNUEMultilayerL1Size
+		if isDualAct {
+			l2InCount = 2 * NNUEMultilayerL1Size
+		}
+		for b := 0; b < OutputBuckets; b++ {
+			for k := 0; k < NNUEMultilayerL2Size; k++ {
+				for j := 0; j < l2InCount; j++ {
+					nextParams.L2Weights[b][j][k] = readF32()
+				}
+			}
+		}
+
+		// L2 biases: 256 f32 (8 buckets x 32 neurons)
+		for b := 0; b < OutputBuckets; b++ {
+			for k := 0; k < NNUEMultilayerL2Size; k++ {
+				nextParams.L2Biases[b][k] = readF32()
+			}
+		}
+
+		// L3 weights: transposed (8 rows x 32 cols in row-major file view), f32
+		for b := 0; b < OutputBuckets; b++ {
+			for k := 0; k < NNUEMultilayerL2Size; k++ {
+				nextParams.L3Weights[b][k] = readF32()
+			}
+		}
+
+		// L3 biases: 8 f32 (8 buckets x 1 score)
+		for b := 0; b < OutputBuckets; b++ {
+			nextParams.L3Biases[b] = readF32()
+		}
+
+		nextParams.IsMultilayer = true
+		nextParams.IsDualActivation = isDualAct
+
+		nnueParams = nextParams
+		nnue.generation++
+		nnue.Loaded = true
+		return true
 	}
 
 	is8Bucket := len(data) >= EightBucketSingleNetSize
@@ -962,6 +1265,8 @@ func nnueLoadFromBytes(data []byte) bool {
 			nextParams.OutputBiases[b] = bias
 		}
 	}
+
+	nextParams.IsMultilayer = false
 
 	nnueParams = nextParams
 	nnue.generation++

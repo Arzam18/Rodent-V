@@ -226,12 +226,14 @@ func scoreQuiet(m *MovePicker) {
 // call instead of the bubble approach's up to n-1 swaps.
 func (m *MovePicker) pickBest() int {
 	best := m.cur
+	bestVal := m.value[best]
 	for i := m.cur + 1; i < m.end; i++ {
-		if m.value[i] > m.value[best] {
+		if v := m.value[i]; v > bestVal {
+			bestVal = v
 			best = i
 		}
 	}
-	m.value[m.cur], m.value[best] = m.value[best], m.value[m.cur]
+	m.value[m.cur], m.value[best] = bestVal, m.value[m.cur]
 	m.move[m.cur], m.move[best] = m.move[best], m.move[m.cur]
 	m.cur++
 	return m.move[m.cur-1]
