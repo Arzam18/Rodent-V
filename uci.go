@@ -111,6 +111,7 @@ func uciLoop() {
 			fmt.Println("option name UCI_LimitStrength type check default false")
 			fmt.Printf("option name UCI_Elo type spin default %d min 800 max 3000\n", engineElo)
 			fmt.Println("option name Threads type spin default 1 min 1 max 256")
+			fmt.Printf("option name Move Overhead type spin default %d min 0 max 5000\n", moveOverhead)
 
 			if !noOptions {
 				fmt.Println("option name OwnBook type check default false")
@@ -347,6 +348,12 @@ func parseSetOption(tokens []string) {
 		}
 		return
 
+	case strings.EqualFold(name, "Move Overhead") || strings.EqualFold(name, "MoveOverhead"):
+		if n, err := strconv.Atoi(value); err == nil {
+			moveOverhead = int64(limitValue(n, 0, 5000))
+		}
+		return
+
 	case strings.EqualFold(name, "UCI_LimitStrength"):
 		if b, err := strconv.ParseBool(value); err == nil {
 			limitStrength = b
@@ -537,7 +544,7 @@ func parseGoParams(tokens []string, p *Pos) (int64, int64, int, int64) {
 	btime := int64(-1)
 	winc := int64(0)
 	binc := int64(0)
-	movestogo := int64(16)
+	movestogo := int64(0)
 	movetime := int64(-1)
 	maxDepth := maxPly - 1
 	nodes := int64(-1)
@@ -594,7 +601,7 @@ func parseGoParams(tokens []string, p *Pos) (int64, int64, int, int64) {
 	}
 
 	if movetime >= 0 {
-		t := movetime - 50 // subtract I/O safety margin
+		t := movetime - moveOverhead
 		if t < 0 {
 			t = 0
 		}
@@ -613,34 +620,48 @@ func parseGoParams(tokens []string, p *Pos) (int64, int64, int, int64) {
 		return -1, -1, maxDepth, nodes // no clock provided -> search indefinitely or by nodes
 	}
 
+	mtg := movestogo
+	if mtg <= 0 {
+		mtg = 25
+	}
+
+	usableTime := myTime
 	// Reserve a small buffer when only one move remains on the clock.
-	if movestogo == 1 {
-		dec := myTime / 10
+	if mtg == 1 {
+		dec := usableTime / 10
 		if dec > 1000 {
 			dec = 1000
 		}
-		myTime -= dec
+		usableTime -= dec
 	}
 
-	// Spread remaining time evenly over the expected number of moves.
-	alloc := (myTime + myInc*(movestogo-1)) / movestogo
-	if alloc > myTime {
-		alloc = myTime
+	totalBudget := usableTime + myInc*(mtg-1) - moveOverhead
+	if totalBudget < 0 {
+		totalBudget = 0
 	}
-	alloc -= 50 // I/O safety margin
-	if alloc < 0 {
-		alloc = 0
+
+	alloc := totalBudget / mtg
+
+	maxSafe := (usableTime * 65) / 100
+	if maxSafe > usableTime-moveOverhead {
+		maxSafe = usableTime - moveOverhead
 	}
+	if maxSafe < 0 {
+		maxSafe = 0
+	}
+
+	if alloc > maxSafe {
+		alloc = maxSafe
+	}
+
 	// Soft limit: stop comfortably between iterations (75% of base time).
 	soft := alloc * 75 / 100
-	// Hard limit: allow up to 4x base time in complex struggles before aborting.
-	hard := alloc * 4
-	if hard > myTime-50 {
-		hard = myTime - 50
-		if hard < 0 {
-			hard = 0
-		}
+	// Hard limit: allow up to 3x base time in complex struggles.
+	hard := alloc * 3
+	if hard > maxSafe {
+		hard = maxSafe
 	}
+
 	return soft, hard, maxDepth, nodes
 }
 

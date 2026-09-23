@@ -33,6 +33,7 @@ var engineElo = 3000
 var maxBookDepth = 128
 var timeoutTestPeriod int64 = 1023
 var noOptions = false // mode for testers, disabling options
+var moveOverhead int64 = 100
 var readPersonalityFiles bool = true
 var personalityFile string // default path to personality file
 var nnuePath string        // default path to NNUE file
