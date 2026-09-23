@@ -166,9 +166,10 @@ func think(p *Pos, states []*SearchState, maxDepth int, nodesLimit int64) {
 			} else if bestMoveStability <= 1 {
 				// Unstable best move (changed on previous iteration) -> extend soft budget by 50%
 				adjustedSoft = softTimeLimit * 150 / 100
-				if adjustedSoft > hardTimeLimit {
-					adjustedSoft = hardTimeLimit
-				}
+			}
+			maxSoft := (hardTimeLimit * 75) / 100
+			if adjustedSoft > maxSoft {
+				adjustedSoft = maxSoft
 			}
 			if elapsed >= adjustedSoft || elapsed >= hardTimeLimit {
 				break
