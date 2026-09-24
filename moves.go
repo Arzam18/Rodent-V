@@ -4,16 +4,16 @@
 //
 //   makeMove() and unmakeMove() are the engine's most critical
 //   functions.  Every field in Pos that is kept incrementally
-//   (bitboards, piece array, material, PST score, Zobrist key,
+//   (bitboards, piece array, material, PST score, Zobrist keys,
 //   castling rights, en-passant square) must be updated here.
 //
 //   DESIGN PRINCIPLE
 //   ----------------
 //   We do NOT copy the full position before each move.  Instead,
 //   makeMove() saves just the fields that cannot be reconstructed
-//   from the move alone into an Undo struct, then unmakeMove()
+//   from the move alone into extrenal structs, then unmakeMove()
 //   restores them.  This is the "incremental update" style, and it
-//   is faster than full copying because most fields (bitboards, PST
+//   is faster for us than full copying because most fields (bitboards)
 //   scores, material) can be recomputed by reversing the same
 //   arithmetic.
 //
@@ -39,11 +39,15 @@
 
 package main
 
-// makeMove applies move to position p. The Update record
+// makeMove() applies move to position p and saves data
+// needed to undo a move in two structs. The Update record
 // contains information about nnue update that should be
 // applied before executing any other move (or discarded
 // if a move made is pruned or proven illegal before that)
-// plus data for unmaking a move
+// plus information needed for incremental part of undoing
+// a move. Revert records stuff that will be fed back to
+// position: various hash keys, en passant square and data
+// needed to detect triple repetition.
 
 func makeMove(p *Pos, u *Update, r *Revert, move int) {
 	side := p.side
@@ -97,12 +101,13 @@ func makeMove(p *Pos, u *Update, r *Revert, move int) {
 	}
 
 	// --- Move the piece from -> to ---
+	// (handling castling completely separately is easier for FRC)
 	if moveType(move) != CASTLE {
 		p.board[u.from] = NO_PC
 		p.board[u.to] = makePiece(side, u.movingType)
 	
 		hashDelta := zobPiece[makePiece(side, u.movingType)][u.from] ^
-			zobPiece[makePiece(side, u.movingType)][u.to]
+					 zobPiece[makePiece(side, u.movingType)][u.to]
 	
 		p.key ^= hashDelta
 		if u.movingType == P {
@@ -133,8 +138,8 @@ func makeMove(p *Pos, u *Update, r *Revert, move int) {
 		p.key ^= hashDelta
 		if u.captType == P {
 			p.pawnKey[enemy] ^= hashDelta
-		} else if u.captType != K {
-			p.nonPawnKey[enemy] ^= hashDelta
+		} else {
+			p.nonPawnKey[enemy] ^= hashDelta // we know implicitly that we are not capturing the king
 		}
 		if u.captType == N || u.movingType == B {
 			p.minorKey[side] ^= hashDelta
@@ -219,7 +224,7 @@ func makeMove(p *Pos, u *Update, r *Revert, move int) {
 		u.capSq = capSq
 		p.board[capSq] = NO_PC
 		p.key ^= zobPiece[makePiece(enemy, P)][capSq]
-		p.pawnKey[enemy] = p.pawnKey[enemy] ^ zobPiece[makePiece(enemy, P)][capSq]
+		p.pawnKey[enemy] ^= zobPiece[makePiece(enemy, P)][capSq]
 		p.colorBB[enemy] ^= squareBit(capSq)
 		p.typeBB[P] ^= squareBit(capSq)
 		p.count[enemy][P]--
