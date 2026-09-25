@@ -4,24 +4,21 @@ ifeq ($(OS),Windows_NT)
 	EXE := $(EXE).exe
 endif
 
-.PHONY: all build clean windows linux AVX2
+.PHONY: all build clean AVX2 x86-64-bmi2 x86-64-avx2 x86-64-modern
+
+export GOAMD64 = v3
 
 all: build
 
-# OpenBench builds using cpuflags as targets (e.g., 'make AVX2')
+# OpenBench builds using cpuflags or ISA as targets (e.g. 'make AVX2')
 AVX2: build
+x86-64-bmi2: build
+x86-64-avx2: build
+x86-64-modern: build
 
 # Default build (uses host OS)
 build:
-	GOAMD64=v3 go build -ldflags="-s -w" -o $(EXE)
-
-# Cross-compile for Windows (AVX2)
-windows:
-	GOOS=windows GOARCH=amd64 GOAMD64=v3 go build -ldflags="-s -w" -o rodent_v.exe
-
-# Cross-compile for Linux (AVX2)
-linux:
-	GOOS=linux GOARCH=amd64 GOAMD64=v3 go build -ldflags="-s -w" -o rodent_v
+	go build -ldflags="-s -w" -o $(EXE)
 
 clean:
-	rm -f rodent_v rodent_v.exe
+	go clean
