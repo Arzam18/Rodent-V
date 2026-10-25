@@ -40,8 +40,7 @@ jobs:
         run: |
           set -eu
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w" \
-            -o dist/rodent-v-android-arm64 .
+          go build -trimpath -ldflags="-s -w" -o dist/rodent-v-android-arm64 .
 
       - name: Verify binary
         run: |
