@@ -1,4 +1,4 @@
-name: Build Rodent V for Android ARM64
+name: Build Rodent V Android ARM64 - Five NNUE Networks
 
 on:
   workflow_dispatch:
@@ -8,17 +8,15 @@ on:
       - "*.go"
       - "go.mod"
       - "go.sum"
-      - "Makefile"
       - "nets/**"
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build Android ARM64
+  build-five-networks:
+    name: Build one Android binary per NNUE network
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -32,30 +30,38 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Build engine
+      - name: Build each network separately
+        shell: bash
         env:
           GOOS: android
           GOARCH: arm64
           CGO_ENABLED: "0"
         run: |
-          set -eu
+          set -euo pipefail
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o dist/rodent-v-android-arm64 .
+          shopt -s nullglob
+          nets=(nets/*.bin)
+          if [ "${#nets[@]}" -ne 5 ]; then
+            echo "Expected exactly 5 .bin network files in nets/, found ${#nets[@]}"
+            printf 'Found: %s\n' "${nets[@]:-none}"
+            exit 1
+          fi
+          embedded="nets/rodent_8kb_512pw_multilayer_v8.bin"
+          mkdir -p /tmp/rodent-net-inputs
+          for net in "${nets[@]}"; do cp "$net" "/tmp/rodent-net-inputs/$(basename "$net")"; done
+          for net in /tmp/rodent-net-inputs/*.bin; do
+            name="$(basename "$net" .bin)"
+            echo "Building with NNUE network: $name"
+            cp "$net" "$embedded"
+            go build -trimpath -ldflags="-s -w" -o "dist/rodent-v-${name}-android-arm64" .
+            test -s "dist/rodent-v-${name}-android-arm64"
+            cp "$net" dist/
+          done
+          (cd dist && zip -q rodent-v-five-net-builds.zip rodent-v-*-android-arm64 *.bin)
 
-      - name: Verify binary
-        run: |
-          set -eu
-          test -s dist/rodent-v-android-arm64
-          file dist/rodent-v-android-arm64
-
-      - name: Package binary
-        run: |
-          cd dist
-          zip rodent-v-android-arm64.zip rodent-v-android-arm64
-
-      - name: Upload artifact
+      - name: Upload five-network build package
         uses: actions/upload-artifact@v4
         with:
-          name: rodent-v-android-arm64
-          path: dist/rodent-v-android-arm64.zip
+          name: rodent-v-five-networks-android-arm64
+          path: dist/rodent-v-five-net-builds.zip
           if-no-files-found: error
