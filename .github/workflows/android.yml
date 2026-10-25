@@ -1,62 +1,62 @@
 name: Build Rodent V for Android ARM64
 
-"on":
-workflow_dispatch:
-push:
-paths:
-- ".github/workflows/android.yml"
-- "*.go"
-- "go.mod"
-- "go.sum"
-- "Makefile"
-- "nets/**"
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/android.yml"
+      - "*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - "nets/**"
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-build:
-name: Build Android ARM64
-runs-on: ubuntu-latest
+  build:
+    name: Build Android ARM64
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Checkout source
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-  - name: Set up Go
-    uses: actions/setup-go@v5
-    with:
-      go-version-file: go.mod
-      cache: true
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
-  - name: Download dependencies
-    run: go mod download
+      - name: Download dependencies
+        run: go mod download
 
-  - name: Build engine
-    env:
-      GOOS: android
-      GOARCH: arm64
-      CGO_ENABLED: "0"
-    run: |
-      set -eu
-      mkdir -p dist
-      go build -trimpath -ldflags="-s -w" \
-        -o dist/rodent-v-android-arm64 .
+      - name: Build engine
+        env:
+          GOOS: android
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: |
+          set -eu
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" \
+            -o dist/rodent-v-android-arm64 .
 
-  - name: Verify binary
-    run: |
-      set -eu
-      test -s dist/rodent-v-android-arm64
-      file dist/rodent-v-android-arm64
+      - name: Verify binary
+        run: |
+          set -eu
+          test -s dist/rodent-v-android-arm64
+          file dist/rodent-v-android-arm64
 
-  - name: Package binary
-    run: |
-      cd dist
-      zip rodent-v-android-arm64.zip rodent-v-android-arm64
+      - name: Package binary
+        run: |
+          cd dist
+          zip rodent-v-android-arm64.zip rodent-v-android-arm64
 
-  - name: Upload artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: rodent-v-android-arm64
-      path: dist/rodent-v-android-arm64.zip
-      if-no-files-found: error
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodent-v-android-arm64
+          path: dist/rodent-v-android-arm64.zip
+          if-no-files-found: error
