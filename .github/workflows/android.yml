@@ -1,6 +1,6 @@
 name: Build Rodent V for Android ARM64
 
-on:
+"on":
 workflow_dispatch:
 push:
 paths:
@@ -29,35 +29,32 @@ steps:
       go-version-file: go.mod
       cache: true
 
-  - name: Download Go dependencies
+  - name: Download dependencies
     run: go mod download
 
-  - name: Build Rodent V for Android ARM64
+  - name: Build engine
     env:
       GOOS: android
       GOARCH: arm64
       CGO_ENABLED: "0"
     run: |
-      set -euo pipefail
+      set -eu
       mkdir -p dist
-      go build \
-        -trimpath \
-        -ldflags="-s -w" \
-        -o dist/rodent-v-android-arm64 \
-        .
+      go build -trimpath -ldflags="-s -w" \
+        -o dist/rodent-v-android-arm64 .
 
   - name: Verify binary
     run: |
-      set -euo pipefail
+      set -eu
       test -s dist/rodent-v-android-arm64
       file dist/rodent-v-android-arm64
 
-  - name: Package Android ARM64 binary
+  - name: Package binary
     run: |
       cd dist
       zip rodent-v-android-arm64.zip rodent-v-android-arm64
 
-  - name: Upload build artifact
+  - name: Upload artifact
     uses: actions/upload-artifact@v4
     with:
       name: rodent-v-android-arm64
