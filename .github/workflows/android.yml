@@ -1,0 +1,65 @@
+name: Build Rodent V for Android ARM64
+
+on:
+workflow_dispatch:
+push:
+paths:
+- ".github/workflows/android.yml"
+- "*.go"
+- "go.mod"
+- "go.sum"
+- "Makefile"
+- "nets/**"
+
+permissions:
+contents: read
+
+jobs:
+build:
+name: Build Android ARM64
+runs-on: ubuntu-latest
+
+steps:
+  - name: Checkout source
+    uses: actions/checkout@v4
+
+  - name: Set up Go
+    uses: actions/setup-go@v5
+    with:
+      go-version-file: go.mod
+      cache: true
+
+  - name: Download Go dependencies
+    run: go mod download
+
+  - name: Build Rodent V for Android ARM64
+    env:
+      GOOS: android
+      GOARCH: arm64
+      CGO_ENABLED: "0"
+    run: |
+      set -euo pipefail
+      mkdir -p dist
+      go build \
+        -trimpath \
+        -ldflags="-s -w" \
+        -o dist/rodent-v-android-arm64 \
+        .
+
+  - name: Verify binary
+    run: |
+      set -euo pipefail
+      test -s dist/rodent-v-android-arm64
+      file dist/rodent-v-android-arm64
+
+  - name: Package Android ARM64 binary
+    run: |
+      cd dist
+      zip rodent-v-android-arm64.zip rodent-v-android-arm64
+
+  - name: Upload build artifact
+    uses: actions/upload-artifact@v4
+    with:
+      name: rodent-v-android-arm64
+      path: dist/rodent-v-android-arm64.zip
+      if-no-files-found: error
