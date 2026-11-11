@@ -29,6 +29,7 @@ import (
 	"math"
 	"math/bits"
 	"os"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/cpu"
@@ -125,12 +126,14 @@ type NNUEParameters struct {
 	IsDualActivation bool
 	L1WeightsRaw     [OutputBuckets][NNUEHiddenSize][NNUEMultilayerL1Size]int8
 	L1WeightsTiled   [OutputBuckets][NNUEHiddenSize / 4][2][32]int8
-	L1Weights        [OutputBuckets][NNUEHiddenSize][NNUEMultilayerL1Size]float32
-	L1Biases         [OutputBuckets][NNUEMultilayerL1Size]float32
-	L2Weights        [OutputBuckets][NNUEMultilayerL2Inputs][NNUEMultilayerL2Size]float32
-	L2Biases         [OutputBuckets][NNUEMultilayerL2Size]float32
-	L3Weights        [OutputBuckets][NNUEMultilayerL2Size]float32
-	L3Biases         [OutputBuckets]float32
+	// Sum of each signed-int8 L1 output column, for exact u8 x i8 SDOT correction.
+	L1WeightSums [OutputBuckets][NNUEMultilayerL1Size]int32
+	L1Weights    [OutputBuckets][NNUEHiddenSize][NNUEMultilayerL1Size]float32
+	L1Biases     [OutputBuckets][NNUEMultilayerL1Size]float32
+	L2Weights    [OutputBuckets][NNUEMultilayerL2Inputs][NNUEMultilayerL2Size]float32
+	L2Biases     [OutputBuckets][NNUEMultilayerL2Size]float32
+	L3Weights    [OutputBuckets][NNUEMultilayerL2Size]float32
+	L3Biases     [OutputBuckets]float32
 }
 
 var nnueParams = &NNUEParameters{}
@@ -170,8 +173,8 @@ type NNUEState struct {
 
 // Dispatch to assembly code for various net sizes lives in the nnueX
 // wrapper functions below (nnueAddSingle, nnueMove, nnueEval, ...).
-// hasAVX2 is resolved once at startup; every nnueX wrapper branches on
-// it directly instead of going through a package-level func variable.
+// AVX2, NEON and DotProd feature flags are resolved once at startup; each
+// nnueX wrapper branches directly to the safest available backend.
 //
 // The previous design stored the chosen kernel in six func-var globals
 // (addSingleFunction, moveFunction, evalFunction, ...) selected once in
@@ -185,12 +188,20 @@ type NNUEState struct {
 // compiler verify none of the pointer arguments escape, at zero cost to
 // the existing multi-size flexibility.
 var hasAVX2 bool
+var hasNEON bool
+var hasDotProd bool
 
 func init() {
 	hasAVX2 = cpu.X86.HasAVX2
+	hasNEON = runtime.GOARCH == "arm64" // Advanced SIMD is mandatory in AArch64.
+	hasDotProd = hasNEON && cpu.ARM64.HasASIMDDP
 }
 
 func nnueAddSingle(a, w *int16) {
+	if hasNEON {
+		addSingleNEON(a, w)
+		return
+	}
 	if !hasAVX2 {
 		addSingleScalar(a, w)
 		return
@@ -216,6 +227,10 @@ func nnueAddSingle(a, w *int16) {
 }
 
 func nnueSubSingle(a, w *int16) {
+	if hasNEON {
+		subSingleNEON(a, w)
+		return
+	}
 	if !hasAVX2 {
 		subSingleScalar(a, w)
 		return
@@ -241,6 +256,10 @@ func nnueSubSingle(a, w *int16) {
 }
 
 func nnueMove(a0, a1 *int16, wFrom0, wTo0, wFrom1, wTo1 *int16) {
+	if hasNEON {
+		moveNEON(a0, a1, wFrom0, wTo0, wFrom1, wTo1)
+		return
+	}
 	if !hasAVX2 {
 		moveScalar(a0, a1, wFrom0, wTo0, wFrom1, wTo1)
 		return
@@ -266,6 +285,10 @@ func nnueMove(a0, a1 *int16, wFrom0, wTo0, wFrom1, wTo1 *int16) {
 }
 
 func nnueCapture(a0, a1 *int16, wTo0, wFrom0, wCap0, wTo1, wFrom1, wCap1 *int16) {
+	if hasNEON {
+		captureNEON(a0, a1, wTo0, wFrom0, wCap0, wTo1, wFrom1, wCap1)
+		return
+	}
 	if !hasAVX2 {
 		captureScalar(a0, a1, wTo0, wFrom0, wCap0, wTo1, wFrom1, wCap1)
 		return
@@ -291,6 +314,10 @@ func nnueCapture(a0, a1 *int16, wTo0, wFrom0, wCap0, wTo1, wFrom1, wCap1 *int16)
 }
 
 func nnueCastle(a0, a1 *int16, wKFrom0, wKTo0, wRFrom0, wRTo0, wKFrom1, wKTo1, wRFrom1, wRTo1 *int16) {
+	if hasNEON {
+		castleNEON(a0, a1, wKFrom0, wKTo0, wRFrom0, wRTo0, wKFrom1, wKTo1, wRFrom1, wRTo1)
+		return
+	}
 	if !hasAVX2 {
 		castleScalar(a0, a1, wKFrom0, wKTo0, wRFrom0, wRTo0, wKFrom1, wKTo1, wRFrom1, wRTo1)
 		return
@@ -316,6 +343,10 @@ func nnueCastle(a0, a1 *int16, wKFrom0, wKTo0, wRFrom0, wRTo0, wKFrom1, wKTo1, w
 }
 
 func nnueEval(a0, a1, w0, w1 *int16, sum *int32) {
+	if hasNEON {
+		evalNEON(a0, a1, w0, w1, sum)
+		return
+	}
 	if !hasAVX2 {
 		evalScalar(a0, a1, w0, w1, sum)
 		return
@@ -353,6 +384,10 @@ func nnueEval(a0, a1, w0, w1 *int16, sum *int32) {
 // sizes nothing currently runs isn't worth the risk of an unverifiable
 // dead path.
 func nnueMove3(dst0, src0, dst1, src1, wFrom0, wTo0, wFrom1, wTo1 *int16) {
+	if hasNEON {
+		moveNEON3(dst0, src0, dst1, src1, wFrom0, wTo0, wFrom1, wTo1)
+		return
+	}
 	if !hasAVX2 {
 		moveScalar3(dst0, src0, dst1, src1, wFrom0, wTo0, wFrom1, wTo1)
 		return
@@ -367,6 +402,10 @@ func nnueMove3(dst0, src0, dst1, src1, wFrom0, wTo0, wFrom1, wTo1 *int16) {
 }
 
 func nnueCapture3(dst0, src0, dst1, src1, wTo0, wFrom0, wCap0, wTo1, wFrom1, wCap1 *int16) {
+	if hasNEON {
+		captureNEON3(dst0, src0, dst1, src1, wTo0, wFrom0, wCap0, wTo1, wFrom1, wCap1)
+		return
+	}
 	if !hasAVX2 {
 		captureScalar3(dst0, src0, dst1, src1, wTo0, wFrom0, wCap0, wTo1, wFrom1, wCap1)
 		return
@@ -381,6 +420,10 @@ func nnueCapture3(dst0, src0, dst1, src1, wTo0, wFrom0, wCap0, wTo1, wFrom1, wCa
 }
 
 func nnueCastle3(dst0, src0, dst1, src1, wKFrom0, wKTo0, wRFrom0, wRTo0, wKFrom1, wKTo1, wRFrom1, wRTo1 *int16) {
+	if hasNEON {
+		castleNEON3(dst0, src0, dst1, src1, wKFrom0, wKTo0, wRFrom0, wRTo0, wKFrom1, wKTo1, wRFrom1, wRTo1)
+		return
+	}
 	if !hasAVX2 {
 		castleScalar3(dst0, src0, dst1, src1, wKFrom0, wKTo0, wRFrom0, wRTo0, wKFrom1, wKTo1, wRFrom1, wRTo1)
 		return
@@ -898,6 +941,9 @@ func (acc *Accumulator) getEval(p *Pos, stm int) int {
 			)
 			return int(sum)
 		}
+		if hasNEON {
+			return acc.getEvalMultilayerARM64(bucket, stm)
+		}
 		return acc.getEvalMultilayer(bucket, stm)
 	}
 
@@ -918,6 +964,9 @@ func (acc *Accumulator) getEval(p *Pos, stm int) int {
 }
 
 func (acc *Accumulator) getEvalMultilayer(bucket, stm int) int {
+	if hasNEON {
+		return acc.getEvalMultilayerARM64(bucket, stm)
+	}
 	if hasAVX2 && nnueParams.IsDualActivation {
 		var sum int32
 		getEvalMultilayerAVX2(
@@ -1110,6 +1159,7 @@ func nnueLoadFromBytes(data []byte) bool {
 					w := readI8()
 					nextParams.L1WeightsRaw[b][i][j] = w
 					nextParams.L1Weights[b][i][j] = float32(w) / float32(NNUEL1Scale)
+					nextParams.L1WeightSums[b][j] += int32(w)
 				}
 			}
 		}

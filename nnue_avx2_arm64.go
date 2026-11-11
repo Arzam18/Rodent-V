@@ -4,7 +4,7 @@ package main
 
 // These placeholders satisfy references to x86 AVX2 kernels on ARM64.
 // hasAVX2 is false on ARM64, so these functions must never be called.
-// ARM64 currently uses the portable scalar NNUE implementation.
+// The dedicated ARM64 NEON/SDOT backend is implemented in nnue_neon_arm64.go.
 
 func addSingleAVX2_64(a, w *int16) {
 	panic("AVX2 kernel called on ARM64")

@@ -100,6 +100,11 @@ func uciLoop() {
 			arch := "Scalar"
 			if cpu.X86.HasAVX2 {
 				arch = "AVX2"
+			} else if hasNEON {
+				arch = "ARM64 NEON"
+				if hasDotProd {
+					arch += "+SDOT"
+				}
 			}
 			fmt.Printf("id name Rodent V %s %s\n", versionString, arch)
 			fmt.Println("id author Naman Thanki, Pawel Koziol, based on Sungorus by Pablo Vazquez")
