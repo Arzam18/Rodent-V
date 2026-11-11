@@ -1,4 +1,4 @@
-name: Build Rodent V Android ARM64 - Five NNUE Networks
+name: Build Rodent V Android ARM64 NEON - Five NNUE Networks
 
 on:
   workflow_dispatch:
@@ -6,6 +6,8 @@ on:
     paths:
       - ".github/workflows/android.yml"
       - "*.go"
+      - "*.s"
+      - "scripts/**"
       - "go.mod"
       - "go.sum"
       - "nets/**"
@@ -15,10 +17,10 @@ permissions:
 
 jobs:
   build-five-networks:
-    name: Build one Android binary per NNUE network
+    name: Build five Android ARM64 NEON engines
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout source
+      - name: Checkout source and all five networks
         uses: actions/checkout@v4
 
       - name: Set up Go
@@ -27,18 +29,36 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Download dependencies and run host regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod download
+          go test ./...
 
-      - name: Build each network separately
+      - name: Cross-compile ARM64 regression tests
+        shell: bash
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          GOARM64: v8.0
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          go test -c -o /tmp/rodent-arm64-tests .
+          test -s /tmp/rodent-arm64-tests
+
+      - name: Build one self-contained engine for each NNUE network
         shell: bash
         env:
           GOOS: android
           GOARCH: arm64
+          GOARM64: v8.0
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
-          mkdir -p dist
+          rm -rf dist /tmp/rodent-net-inputs
+          mkdir -p dist /tmp/rodent-net-inputs
           shopt -s nullglob
           nets=(nets/*.bin)
           if [ "${#nets[@]}" -ne 5 ]; then
@@ -46,22 +66,55 @@ jobs:
             printf 'Found: %s\n' "${nets[@]:-none}"
             exit 1
           fi
+
+          # Stage every source network before replacing the go:embed target.
+          # The original nets remain in the repository and are never copied to
+          # dist/ or included in the published artifact.
+          for net in "${nets[@]}"; do
+            test -s "$net"
+            cp "$net" "/tmp/rodent-net-inputs/$(basename "$net")"
+          done
+
           embedded="nets/rodent_8kb_512pw_multilayer_v8.bin"
-          mkdir -p /tmp/rodent-net-inputs
-          for net in "${nets[@]}"; do cp "$net" "/tmp/rodent-net-inputs/$(basename "$net")"; done
           for net in /tmp/rodent-net-inputs/*.bin; do
             name="$(basename "$net" .bin)"
-            echo "Building with NNUE network: $name"
+            echo "Building Android ARM64 NEON engine with NNUE: $name"
             cp "$net" "$embedded"
-            go build -trimpath -ldflags="-s -w" -o "dist/rodent-v-${name}-android-arm64" .
+            GOARM64=v8.0 go build -trimpath -ldflags="-s -w" \
+              -o "dist/rodent-v-${name}-android-arm64" .
             test -s "dist/rodent-v-${name}-android-arm64"
-            cp "$net" dist/
           done
-          (cd dist && zip -q rodent-v-five-net-builds.zip rodent-v-*-android-arm64 *.bin)
 
-      - name: Upload five-network build package
+          built=(dist/rodent-v-*-android-arm64)
+          if [ "${#built[@]}" -ne 5 ]; then
+            echo "Expected exactly 5 engine binaries, found ${#built[@]}"
+            exit 1
+          fi
+          if compgen -G 'dist/*.bin' >/dev/null; then
+            echo "ERROR: NNUE files must not be published as artifacts"
+            exit 1
+          fi
+
+          export LLVM_OBJDUMP="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
+          python3 scripts/verify_android_arm64.py "${built[@]}"
+
+          # The ZIP contains exactly five engine executables, no NNUE files.
+          (cd dist && zip -q rodent-v-five-net-builds.zip rodent-v-*-android-arm64)
+          python3 - <<'PY'
+          import zipfile
+          archive = zipfile.ZipFile("dist/rodent-v-five-net-builds.zip")
+          names = archive.namelist()
+          assert len(names) == 5, f"Expected 5 files in artifact, got {names}"
+          assert all(name.startswith("rodent-v-") and name.endswith("-android-arm64") for name in names)
+          assert all(not name.endswith(".bin") for name in names)
+          print("Verified artifact contains exactly five engine binaries and no NNUE files:")
+          for name in names:
+              print(" -", name)
+          PY
+
+      - name: Upload five engine builds only (no NNUE files)
         uses: actions/upload-artifact@v4
         with:
-          name: rodent-v-five-networks-android-arm64
+          name: rodent-v-five-networks-android-arm64-neon-dotprod
           path: dist/rodent-v-five-net-builds.zip
           if-no-files-found: error
